@@ -6,8 +6,17 @@ node_modules/
 # Expo
 .expo/
 dist/
+dist-android/
 web-build/
 expo-env.d.ts
+.android-export.log
+.expo-web.log
+.expo-web.err.log
+.gh-auth.log
+.gh-auth.err.log
+.preview.log
+.preview.err.log
+.web-export.log
 
 # Native
 .kotlin/
@@ -29,6 +38,7 @@ yarn-error.*
 # macOS
 .DS_Store
 *.pem
+*.apk
 
 # local env files
 .env*.local
