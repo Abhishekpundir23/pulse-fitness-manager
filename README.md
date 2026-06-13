@@ -1,50 +1,65 @@
-# Welcome to your Expo app 👋
+# Pulse Fitness Manager
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A modern, local-first Android app for managing gym members, membership plans, payments, dues, attendance, and business reports.
 
-## Get started
+## Features
 
-1. Install dependencies
+- Member profiles with editable contact details, notes, and membership IDs
+- Camera or gallery profile photos that can be changed after saving
+- Custom membership plan creation, editing, deactivation, and reactivation in Indian rupees
+- Membership renewal and new-plan assignment for existing members
+- Full, partial, and pending payment tracking
+- Membership cancellation that removes abandoned balances from dues
+- Permanent member deletion with cascading cleanup
+- Expense entry and removal with live monthly net calculation
+- Cash, UPI, card, and bank-transfer payment records
+- One-tap daily attendance
+- Live collection, dues, expiry, and attendance dashboards
+- Shareable PDF membership invoices
+- Local SQLite storage with no required backend
+- JSON backup and restore through Google Drive or device storage, including profile photos
+- Custom gym profile, branding, and Android launcher icon
 
-   ```bash
-   npm install
-   ```
+Changing or deactivating a plan affects future memberships only. Existing membership invoices, payments, and balances retain the original agreed plan.
 
-2. Start the app
+## Technology
 
-   ```bash
-   npx expo start
-   ```
+- Expo SDK 54
+- React Native and TypeScript
+- Expo Router
+- Expo SQLite
+- EAS Build
 
-In the output, you'll find options to open the app in a
+## Run Locally
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+Requirements: Node.js and Expo Go on an Android device.
 
 ```bash
-npm run reset-project
+npm install
+npx expo start
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Scan the displayed QR code using Expo Go.
 
-## Learn more
+## Validation
 
-To learn more about developing your project with Expo, look at the following resources:
+```bash
+npx tsc --noEmit
+npm run lint
+npx expo-doctor
+npx expo export --platform android
+```
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+## Android Build
 
-## Join the community
+To create an installable preview APK:
 
-Join our community of developers creating universal apps.
+```bash
+npx eas-cli build --platform android --profile preview
+```
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## Data and Backups
+
+All operational data is stored locally in SQLite. The **Gym** tab can export a versioned JSON archive through Android's share sheet. Selecting Google Drive stores the backup there. Restore validates the archive before replacing local records.
+
+Member data and generated backups are intentionally excluded from this repository.
