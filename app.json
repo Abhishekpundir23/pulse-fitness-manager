@@ -2,7 +2,7 @@
   "expo": {
     "name": "Pulse Fitness Manager",
     "slug": "pulse-fitness-manager",
-    "version": "1.0.2",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/images/pulse-icon-1024.png",
     "scheme": "pulsefitness",
@@ -13,7 +13,7 @@
     },
     "android": {
       "package": "in.parsewave.pulsefitness",
-      "versionCode": 3,
+      "versionCode": 4,
       "adaptiveIcon": {
         "backgroundColor": "#0B1320",
         "foregroundImage": "./assets/images/pulse-icon-1024.png"
