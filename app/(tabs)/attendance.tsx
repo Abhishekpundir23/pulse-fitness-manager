@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Avatar, EmptyState, LoadingView, Screen, SearchBox, TopBar } from '@/components/ui-kit';
 import { useAppData } from '@/contexts/app-data';
@@ -69,10 +69,16 @@ export default function AttendanceScreen() {
             message="Add members first, then their daily check-ins will appear here."
           />
         ) : (
-          members.map((member) => {
+          <FlatList
+            data={members}
+            keyExtractor={(member) => String(member.id)}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.listContent}
+            renderItem={({ item: member }) => {
             const present = member.attended_today === 1;
             return (
-              <View key={member.id} style={styles.row}>
+              <View style={styles.row}>
                 <Avatar name={member.name} uri={member.photo_uri} size={48} />
                 <View style={styles.rowCopy}>
                   <Text style={styles.name}>{member.name}</Text>
@@ -97,7 +103,8 @@ export default function AttendanceScreen() {
                 </Pressable>
               </View>
             );
-          })
+          }}
+          />
         )}
       </View>
     </Screen>
@@ -133,6 +140,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     ...shadows.card,
   },
+  listContent: { paddingBottom: 20 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: palette.line },
   rowCopy: { flex: 1 },
   name: { color: palette.ink, fontSize: 15, fontWeight: '800' },

@@ -3,7 +3,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { router } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { MemberCard } from '@/components/member-card';
 import { EmptyState, LoadingView, Screen, SearchBox, TopBar } from '@/components/ui-kit';
@@ -54,7 +54,14 @@ export default function MembersScreen() {
             }
           />
         ) : (
-          members.map((member) => <MemberCard key={member.id} member={member} />)
+          <FlatList
+            data={members}
+            keyExtractor={(member) => String(member.id)}
+            renderItem={({ item }) => <MemberCard member={item} />}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.listContent}
+          />
         )}
       </View>
       <Pressable
@@ -76,6 +83,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     ...shadows.card,
   },
+  listContent: { paddingBottom: 86 },
   fab: {
     position: 'absolute',
     right: 18,
