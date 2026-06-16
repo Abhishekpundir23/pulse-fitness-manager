@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import { Image } from 'expo-image';
 import * as Print from 'expo-print';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Sharing from 'expo-sharing';
@@ -46,6 +47,7 @@ export default function MemberDetailScreen() {
   const [member, setMember] = useState<MemberDetail | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [confirmAction, setConfirmAction] = useState<'cancel' | 'delete' | null>(null);
+  const [photoViewerOpen, setPhotoViewerOpen] = useState(false);
 
   const load = useCallback(async () => {
     setMember(await getMemberDetail(db, memberId));
@@ -211,7 +213,13 @@ export default function MemberDetailScreen() {
     <Screen>
       <View style={styles.profileCard}>
         <View style={styles.profileTop}>
-          <Avatar name={member.name} uri={member.photo_uri} size={82} />
+          <Pressable
+            accessibilityRole="imagebutton"
+            accessibilityLabel={member.photo_uri ? 'Open profile photo' : 'Profile photo'}
+            disabled={!member.photo_uri}
+            onPress={() => setPhotoViewerOpen(true)}>
+            <Avatar name={member.name} uri={member.photo_uri} size={82} />
+          </Pressable>
           <View style={styles.profileCopy}>
             <View style={styles.nameRow}>
               <Text style={styles.name}>{member.name}</Text>
@@ -400,6 +408,33 @@ export default function MemberDetailScreen() {
       <Modal
         animationType="fade"
         transparent
+        visible={photoViewerOpen}
+        onRequestClose={() => setPhotoViewerOpen(false)}>
+        <View style={styles.photoViewerBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setPhotoViewerOpen(false)} />
+          <View style={styles.photoViewerCard}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close profile photo"
+              onPress={() => setPhotoViewerOpen(false)}
+              style={styles.photoViewerClose}>
+              <Ionicons name="close" size={22} color={palette.white} />
+            </Pressable>
+            {!!member.photo_uri && (
+              <Image
+                source={{ uri: member.photo_uri }}
+                contentFit="contain"
+                style={styles.photoViewerImage}
+              />
+            )}
+            <Text style={styles.photoViewerName}>{member.name}</Text>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        transparent
         visible={confirmAction !== null}
         onRequestClose={() => !busy && setConfirmAction(null)}>
         <View style={styles.confirmBackdrop}>
@@ -514,6 +549,25 @@ const styles = StyleSheet.create({
   statusText: { color: palette.lime, fontSize: 10, fontWeight: '800' },
   blockedText: { color: '#FF9B9B' },
   editProfileButton: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.16)' },
+  photoViewerBackdrop: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+    backgroundColor: 'rgba(2,6,12,0.92)',
+  },
+  photoViewerCard: { alignItems: 'center' },
+  photoViewerClose: {
+    alignSelf: 'flex-end',
+    width: 44,
+    height: 44,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    marginBottom: 14,
+  },
+  photoViewerImage: { width: '100%', aspectRatio: 1, borderRadius: radii.xl, backgroundColor: 'rgba(255,255,255,0.06)' },
+  photoViewerName: { color: palette.white, fontSize: 18, fontWeight: '900', marginTop: 16 },
   quickActions: { flexDirection: 'row', justifyContent: 'space-between', paddingTop: 20, marginTop: 18, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.12)' },
   quickAction: { flex: 1, alignItems: 'center' },
   quickIcon: { width: 42, height: 42, borderRadius: 15, backgroundColor: palette.white, alignItems: 'center', justifyContent: 'center' },

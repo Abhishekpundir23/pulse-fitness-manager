@@ -5,7 +5,7 @@ import { useSQLiteContext } from 'expo-sqlite';
 import { useEffect, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { Avatar, Chip, FormField, LoadingView, PrimaryButton, Screen, Section } from '@/components/ui-kit';
+import { Avatar, Chip, DateField, FormField, LoadingView, PrimaryButton, Screen, Section } from '@/components/ui-kit';
 import { useAppData } from '@/contexts/app-data';
 import { getMemberDetail, updateMemberProfile } from '@/lib/database';
 import { persistMemberPhoto } from '@/lib/member-photo';
@@ -27,6 +27,7 @@ export default function EditMemberScreen() {
   const [address, setAddress] = useState('');
   const [notes, setNotes] = useState('');
   const [photoUri, setPhotoUri] = useState('');
+  const [joinedAt, setJoinedAt] = useState('');
 
   useEffect(() => {
     getMemberDetail(db, memberId).then((member) => {
@@ -44,6 +45,7 @@ export default function EditMemberScreen() {
       setAddress(member.address ?? '');
       setNotes(member.notes ?? '');
       setPhotoUri(member.photo_uri ?? '');
+      setJoinedAt(member.joined_at);
       setLoading(false);
     });
   }, [db, memberId]);
@@ -105,6 +107,7 @@ export default function EditMemberScreen() {
         address,
         notes,
         photoUri: persistMemberPhoto(photoUri),
+        joinedAt,
       });
       refreshData();
       router.back();
@@ -136,7 +139,7 @@ export default function EditMemberScreen() {
         </View>
       </View>
 
-      <Section title="Edit member profile" subtitle="Membership and payment history will not be changed">
+      <Section title="Edit member profile" subtitle="For first-time memberships, join date also adjusts the current plan dates">
         <FormField label="Full name *" icon="person-outline" value={name} onChangeText={setName} autoCapitalize="words" />
         <Text style={styles.groupLabel}>Gender</Text>
         <View style={styles.chipRow}>
@@ -146,6 +149,7 @@ export default function EditMemberScreen() {
         </View>
         <FormField label="Mobile number *" icon="call-outline" value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
         <FormField label="Email" icon="mail-outline" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
+        <DateField label="Join date" value={joinedAt} onChange={setJoinedAt} />
         <FormField label="Date of birth" icon="gift-outline" value={dateOfBirth} onChangeText={setDateOfBirth} placeholder="YYYY-MM-DD (optional)" />
         <FormField label="Address" icon="location-outline" value={address} onChangeText={setAddress} multiline />
         <FormField label="Notes" icon="document-text-outline" value={notes} onChangeText={setNotes} multiline />

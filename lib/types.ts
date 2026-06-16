@@ -125,6 +125,7 @@ export type UpdateMemberInput = {
   address?: string;
   notes?: string;
   photoUri?: string;
+  joinedAt: string;
 };
 
 export type CreateMembershipInput = {

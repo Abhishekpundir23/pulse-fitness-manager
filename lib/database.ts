@@ -382,22 +382,49 @@ export async function updateMemberProfile(
   memberId: number,
   input: UpdateMemberInput,
 ) {
-  const result = await db.runAsync(
-    `UPDATE members
-     SET name = ?, gender = ?, phone = ?, email = ?, date_of_birth = ?, address = ?,
-       notes = ?, photo_uri = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`,
-    input.name.trim(),
-    input.gender,
-    input.phone.trim(),
-    input.email?.trim() || null,
-    input.dateOfBirth || null,
-    input.address?.trim() || null,
-    input.notes?.trim() || null,
-    input.photoUri || null,
-    memberId,
-  );
-  if (result.changes === 0) throw new Error('Member not found.');
+  await db.withTransactionAsync(async () => {
+    const result = await db.runAsync(
+      `UPDATE members
+       SET name = ?, gender = ?, phone = ?, email = ?, date_of_birth = ?, address = ?,
+         notes = ?, photo_uri = ?, joined_at = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      input.name.trim(),
+      input.gender,
+      input.phone.trim(),
+      input.email?.trim() || null,
+      input.dateOfBirth || null,
+      input.address?.trim() || null,
+      input.notes?.trim() || null,
+      input.photoUri || null,
+      input.joinedAt,
+      memberId,
+    );
+    if (result.changes === 0) throw new Error('Member not found.');
+
+    const membershipCount = await db.getFirstAsync<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM memberships WHERE member_id = ?',
+      memberId,
+    );
+    if ((membershipCount?.count ?? 0) === 1) {
+      const membership = await db.getFirstAsync<{ id: number; duration_months: number }>(
+        `SELECT ms.id, p.duration_months
+         FROM memberships ms
+         JOIN plans p ON p.id = ms.plan_id
+         WHERE ms.member_id = ?
+         ORDER BY ms.start_date DESC, ms.id DESC
+         LIMIT 1`,
+        memberId,
+      );
+      if (membership) {
+        await db.runAsync(
+          'UPDATE memberships SET start_date = ?, end_date = ? WHERE id = ?',
+          input.joinedAt,
+          addMonths(input.joinedAt, membership.duration_months),
+          membership.id,
+        );
+      }
+    }
+  });
 }
 
 export async function createMembership(db: SQLiteDatabase, input: CreateMembershipInput) {
