@@ -1,12 +1,11 @@
 import * as DocumentPicker from 'expo-document-picker';
 import { Directory, File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import type { SQLiteDatabase } from 'expo-sqlite';
+import { openDatabaseAsync, type SQLiteDatabase } from 'expo-sqlite';
 
 import {
   BACKUP_APP,
   BACKUP_TABLES,
-  TABLE_COLUMNS,
   parseBackupArchive,
   serializeBackup,
   summarizeBackup,
@@ -16,6 +15,11 @@ import {
   type BackupSummary,
   type BackupTable,
 } from '@/lib/backup-archive';
+import {
+  replaceDatabaseRows,
+  restorePhotosIndependently,
+  type RestoreTransactionHandle,
+} from '@/lib/backup-restore';
 
 export type PreparedBackup = {
   file: File;
@@ -113,51 +117,56 @@ export async function exportBackup(db: SQLiteDatabase) {
   return prepared.archive.exportedAt;
 }
 
-async function insertRows(
-  db: SQLiteDatabase,
-  table: BackupTable,
-  rows: BackupRow[],
-) {
-  const columns = TABLE_COLUMNS[table];
-  const placeholders = columns.map(() => '?').join(', ');
-  const sql = `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`;
-  for (const row of rows) {
-    await db.runAsync(
-      sql,
-      columns.map((column) => {
-        const value = row[column];
-        return value === undefined ? null : value as string | number | null;
-      }),
-    );
+function databaseLocation(databasePath: string) {
+  const separator = databasePath.lastIndexOf('/');
+  if (separator === -1) return { databaseName: databasePath, directory: undefined };
+  return {
+    databaseName: databasePath.slice(separator + 1),
+    directory: databasePath.slice(0, separator),
+  };
+}
+
+async function replaceRowsOnIsolatedConnection(db: SQLiteDatabase, archive: BackupArchive) {
+  const { databaseName, directory } = databaseLocation(db.databasePath);
+  const isolated = await openDatabaseAsync(
+    databaseName,
+    { ...db.options, useNewConnection: true },
+    directory,
+  );
+  const transaction: RestoreTransactionHandle = {
+    execAsync: (source) => isolated.execAsync(source),
+    getFirstAsync: (source) => isolated.getFirstAsync<{ foreign_keys: number }>(source),
+    runAsync: (source, values) => isolated.runAsync(source, values),
+  };
+  try {
+    await replaceDatabaseRows(transaction, archive);
+  } finally {
+    await isolated.closeAsync();
   }
 }
 
 async function restoreMemberPhotos(db: SQLiteDatabase, archive: BackupArchive) {
-  let skippedPhotos = 0;
-  for (const [memberId, photo] of Object.entries(archive.memberPhotos ?? {})) {
-    let file: File | null = null;
-    try {
-      const directory = new Directory(Paths.document, 'member-photos');
-      if (!directory.exists) directory.create({ idempotent: true, intermediates: true });
-      file = new File(directory, `restored-${memberId}-${Date.now()}.${photo.extension}`);
-      file.create({ overwrite: true });
-      file.write(photo.data, { encoding: 'base64' });
-      await db.runAsync('UPDATE members SET photo_uri = ? WHERE id = ?', file.uri, Number(memberId));
-    } catch {
-      skippedPhotos += 1;
+  return restorePhotosIndependently(
+    Object.entries(archive.memberPhotos ?? {}),
+    async ([memberId, photo]) => {
+      let file: File | null = null;
       try {
-        if (file?.exists) file.delete();
-      } catch {
-        // Photo cleanup must not prevent the remaining photos from being restored.
+        const directory = new Directory(Paths.document, 'member-photos');
+        if (!directory.exists) directory.create({ idempotent: true, intermediates: true });
+        file = new File(directory, `restored-${memberId}-${Date.now()}.${photo.extension}`);
+        file.create({ overwrite: true });
+        file.write(photo.data, { encoding: 'base64' });
+        await db.runAsync('UPDATE members SET photo_uri = ? WHERE id = ?', file.uri, Number(memberId));
+      } catch (error) {
+        try {
+          if (file?.exists) file.delete();
+        } catch {
+          // Photo cleanup must not prevent the remaining photos from being restored.
+        }
+        throw error;
       }
-      try {
-        await db.runAsync('UPDATE members SET photo_uri = NULL WHERE id = ?', Number(memberId));
-      } catch {
-        // The row restore is already committed; report the skipped photo without masking it.
-      }
-    }
-  }
-  return skippedPhotos;
+    },
+  );
 }
 
 export async function restoreBackup(db: SQLiteDatabase): Promise<RestoreResult | null> {
@@ -172,37 +181,7 @@ export async function restoreBackup(db: SQLiteDatabase): Promise<RestoreResult |
   const archive = parseBackupArchive(await file.text());
   const summary = summarizeBackup(archive);
 
-  await db.execAsync('PRAGMA foreign_keys = ON;');
-  const foreignKeys = await db.getFirstAsync<{ foreign_keys: number }>('PRAGMA foreign_keys;');
-  if (foreignKeys?.foreign_keys !== 1) {
-    throw new Error('Restore cannot continue because database foreign keys are disabled.');
-  }
-  await db.withTransactionAsync(async () => {
-    await db.execAsync(`
-      DELETE FROM attendance;
-      DELETE FROM payments;
-      DELETE FROM memberships;
-      DELETE FROM members;
-      DELETE FROM expenses;
-      DELETE FROM plans;
-      DELETE FROM settings;
-    `);
-
-    await insertRows(db, 'settings', archive.data.settings);
-    await insertRows(db, 'plans', archive.data.plans);
-    await insertRows(
-      db,
-      'members',
-      archive.data.members.map((member) => ({
-        ...member,
-        photo_uri: archive.memberPhotos?.[String(member.id)] ? member.photo_uri : null,
-      })),
-    );
-    await insertRows(db, 'expenses', archive.data.expenses);
-    await insertRows(db, 'memberships', archive.data.memberships);
-    await insertRows(db, 'payments', archive.data.payments);
-    await insertRows(db, 'attendance', archive.data.attendance);
-  });
+  await replaceRowsOnIsolatedConnection(db, archive);
 
   const skippedPhotos = await restoreMemberPhotos(db, archive);
   return { exportedAt: archive.exportedAt, summary, skippedPhotos };

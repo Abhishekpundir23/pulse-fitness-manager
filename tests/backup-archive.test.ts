@@ -159,6 +159,16 @@ test('rejects missing and incorrectly typed required fields', () => {
   assert.throws(() => validateBackupArchive(wrongAmount), /plans.*amount/);
 });
 
+test('rejects unsafe primary and foreign key integers', () => {
+  const unsafeId = structuredClone(validArchive);
+  unsafeId.data.expenses[0].id = Number.MAX_SAFE_INTEGER + 1;
+  assert.throws(() => validateBackupArchive(unsafeId), /expenses.*id/);
+
+  const unsafeForeignKey = structuredClone(validArchive);
+  unsafeForeignKey.data.attendance[0].member_id = Number.MAX_SAFE_INTEGER + 1;
+  assert.throws(() => validateBackupArchive(unsafeForeignKey), /attendance.*member_id/);
+});
+
 test('rejects invalid JSON', () => {
   assert.throws(() => parseBackupArchive('{not-json'), /valid JSON/);
 });

@@ -230,8 +230,8 @@ function validateRows(table: BackupTable, rows: unknown[]): asserts rows is Back
       }
     }
 
-    if ('id' in value && !Number.isInteger(value.id)) {
-      invalidField(table, rowIndex, 'id', 'an integer');
+    if ('id' in value && !Number.isSafeInteger(value.id)) {
+      invalidField(table, rowIndex, 'id', 'a safe integer');
     }
     if (table === 'plans' && !Number.isInteger(value.duration_months)) {
       invalidField(table, rowIndex, 'duration_months', 'an integer');
@@ -240,17 +240,23 @@ function validateRows(table: BackupTable, rows: unknown[]): asserts rows is Back
       invalidField(table, rowIndex, 'active', 'an integer');
     }
     if (table === 'memberships') {
-      if (!Number.isInteger(value.member_id)) invalidField(table, rowIndex, 'member_id', 'an integer');
-      if (!Number.isInteger(value.plan_id)) invalidField(table, rowIndex, 'plan_id', 'an integer');
-    }
-    if (table === 'payments') {
-      if (!Number.isInteger(value.member_id)) invalidField(table, rowIndex, 'member_id', 'an integer');
-      if (!Number.isInteger(value.membership_id)) {
-        invalidField(table, rowIndex, 'membership_id', 'an integer');
+      if (!Number.isSafeInteger(value.member_id)) {
+        invalidField(table, rowIndex, 'member_id', 'a safe integer');
+      }
+      if (!Number.isSafeInteger(value.plan_id)) {
+        invalidField(table, rowIndex, 'plan_id', 'a safe integer');
       }
     }
-    if (table === 'attendance' && !Number.isInteger(value.member_id)) {
-      invalidField(table, rowIndex, 'member_id', 'an integer');
+    if (table === 'payments') {
+      if (!Number.isSafeInteger(value.member_id)) {
+        invalidField(table, rowIndex, 'member_id', 'a safe integer');
+      }
+      if (!Number.isSafeInteger(value.membership_id)) {
+        invalidField(table, rowIndex, 'membership_id', 'a safe integer');
+      }
+    }
+    if (table === 'attendance' && !Number.isSafeInteger(value.member_id)) {
+      invalidField(table, rowIndex, 'member_id', 'a safe integer');
     }
   });
 }
