@@ -3,7 +3,17 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback, useState } from 'react';
 import { router } from 'expo-router';
-import { Alert, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  Alert,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
 import { DateField, FormField, LoadingView, PrimaryButton, Screen, Section, StatCard, TopBar } from '@/components/ui-kit';
 import { useAppData } from '@/contexts/app-data';
@@ -212,7 +222,7 @@ export default function ReportsScreen() {
       </Section>
 
       <Modal animationType="fade" transparent visible={expenseOpen} onRequestClose={() => setExpenseOpen(false)}>
-        <View style={styles.modalBackdrop}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalBackdrop}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setExpenseOpen(false)} />
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
@@ -224,14 +234,19 @@ export default function ReportsScreen() {
                 <Ionicons name="close" size={21} color={palette.inkSoft} />
               </Pressable>
             </View>
-            <FormField label="Expense title" icon="receipt-outline" value={expenseTitle} onChangeText={setExpenseTitle} placeholder="e.g. Electricity bill" />
-            <FormField label="Amount in rupees" icon="cash-outline" value={expenseAmount} onChangeText={setExpenseAmount} keyboardType="numeric" />
-            <FormField label="Category" icon="folder-outline" value={expenseCategory} onChangeText={setExpenseCategory} placeholder="General" />
-            <DateField label="Expense date" value={expenseDate} onChange={setExpenseDate} maximumDate={new Date()} />
-            <FormField label="Notes" icon="document-text-outline" value={expenseNotes} onChangeText={setExpenseNotes} multiline placeholder="Optional" />
-            <PrimaryButton label="Save expense" icon="checkmark-circle" loading={expenseSaving} onPress={saveExpense} />
+            <ScrollView
+              style={styles.modalScroll}
+              contentContainerStyle={styles.modalScrollContent}
+              keyboardShouldPersistTaps="handled">
+              <FormField label="Expense title" icon="receipt-outline" value={expenseTitle} onChangeText={setExpenseTitle} placeholder="e.g. Electricity bill" />
+              <FormField label="Amount in rupees" icon="cash-outline" value={expenseAmount} onChangeText={setExpenseAmount} keyboardType="numeric" />
+              <FormField label="Category" icon="folder-outline" value={expenseCategory} onChangeText={setExpenseCategory} placeholder="General" />
+              <DateField label="Expense date" value={expenseDate} onChange={setExpenseDate} maximumDate={new Date()} />
+              <FormField label="Notes" icon="document-text-outline" value={expenseNotes} onChangeText={setExpenseNotes} multiline placeholder="Optional" />
+              <PrimaryButton label="Save expense" icon="checkmark-circle" loading={expenseSaving} onPress={saveExpense} />
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </Screen>
   );
@@ -270,6 +285,8 @@ const styles = StyleSheet.create({
   deleteExpense: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.redSoft },
   modalBackdrop: { flex: 1, justifyContent: 'center', paddingHorizontal: 22, backgroundColor: 'rgba(11,19,32,0.62)' },
   modalCard: { maxHeight: '90%', padding: 20, borderRadius: radii.xl, backgroundColor: palette.card, ...shadows.card },
+  modalScroll: { flexShrink: 1 },
+  modalScrollContent: { paddingBottom: 8 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18 },
   modalEyebrow: { color: palette.emeraldDark, fontSize: 11, fontWeight: '800', letterSpacing: 1, textTransform: 'uppercase' },
   modalTitle: { color: palette.ink, fontSize: 23, fontWeight: '900', marginTop: 5 },

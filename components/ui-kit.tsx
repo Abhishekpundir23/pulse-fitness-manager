@@ -31,6 +31,8 @@ export function Screen({
 }) {
   const content = scroll ? (
     <ScrollView
+      style={styles.flex}
+      contentInsetAdjustmentBehavior="automatic"
       showsVerticalScrollIndicator={false}
       contentContainerStyle={[styles.screenContent, contentContainerStyle]}
       keyboardShouldPersistTaps="handled">
