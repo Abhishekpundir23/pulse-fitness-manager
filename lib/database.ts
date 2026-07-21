@@ -1,6 +1,7 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
 import { addMonths, todayIso } from '@/lib/format';
+import { buildMemberSnapshotQuery } from '@/lib/member-query';
 import type {
   CreateMembershipInput,
   CreateMemberInput,
@@ -270,29 +271,19 @@ async function assertUniquePhone(db: SQLiteDatabase, phone: string, excludedMemb
   }
 }
 
-function memberFilterSql(filter: MemberFilter) {
-  if (filter === 'due') {
-    return "AND ms.status = 'active' AND MAX(COALESCE(ms.total_amount, 0) - COALESCE(ms.paid_amount, 0), 0) > 0";
-  }
-  if (filter === 'paid') {
-    return "AND ms.status = 'active' AND COALESCE(ms.total_amount, 0) > 0 AND MAX(COALESCE(ms.total_amount, 0) - COALESCE(ms.paid_amount, 0), 0) = 0";
-  }
-  return '';
-}
-
-export async function getMembers(db: SQLiteDatabase, search = '', filter: MemberFilter = 'all') {
-  const normalized = `%${search.trim()}%`;
-  return db.getAllAsync<MemberListItem>(
-    `${MEMBER_LIST_QUERY}
-     WHERE m.status != 'archived'
-       AND (m.name LIKE ? OR m.phone LIKE ? OR m.membership_id LIKE ?)
-       ${memberFilterSql(filter)}
-     ORDER BY m.created_at DESC`,
-    todayIso(),
-    normalized,
-    normalized,
-    normalized,
-  );
+export async function getMembers(
+  db: SQLiteDatabase,
+  search = '',
+  filter: MemberFilter = 'all',
+  snapshotDate = todayIso(),
+) {
+  const query = buildMemberSnapshotQuery({
+    search,
+    filter,
+    snapshotDate,
+    attendanceDate: todayIso(),
+  });
+  return db.getAllAsync<MemberListItem>(query.sql, ...query.args);
 }
 
 export async function getMemberDetail(db: SQLiteDatabase, memberId: number) {

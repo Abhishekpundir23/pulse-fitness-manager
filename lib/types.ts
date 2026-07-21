@@ -2,7 +2,8 @@ export type Gender = 'Male' | 'Female' | 'Other';
 export type MemberStatus = 'active' | 'blocked' | 'archived';
 export type MembershipStatus = 'active' | 'expired' | 'frozen' | 'cancelled';
 export type PaymentMethod = 'Cash' | 'UPI' | 'Card' | 'Bank transfer';
-export type MemberFilter = 'all' | 'due' | 'paid';
+export type MemberFilter = 'all' | 'active' | 'due' | 'paid' | 'expired' | 'cancelled';
+export type SnapshotStatus = 'none' | 'active' | 'expired' | 'cancelled';
 
 export type Plan = {
   id: number;
@@ -39,6 +40,8 @@ export type MemberListItem = {
   paid_amount: number;
   due_amount: number;
   attended_today: number;
+  snapshot_status: SnapshotStatus;
+  snapshot_date: string;
 };
 
 export type Payment = {
