@@ -6,14 +6,23 @@ import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Te
 
 import { FormField, LoadingView, PrimaryButton, Screen, Section, TopBar } from '@/components/ui-kit';
 import { useAppData } from '@/contexts/app-data';
-import { exportBackup, restoreBackup } from '@/lib/backup';
+import {
+  prepareBackup,
+  restoreBackup,
+  savePreparedBackup,
+  sharePreparedBackup,
+  type PreparedBackup,
+} from '@/lib/backup';
 import {
   createPlan,
   getAllPlans,
+  getBackupStatus,
   getGymProfile,
+  saveBackupStatus,
   saveGymProfile,
   setPlanActive,
   updatePlan,
+  type BackupStatus,
 } from '@/lib/database';
 import { formatCurrency } from '@/lib/format';
 import { palette, radii } from '@/lib/theme';
@@ -26,6 +35,7 @@ export default function SettingsScreen() {
   const { refreshData } = useAppData();
   const [profile, setProfile] = useState<GymProfile | null>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
+  const [backupStatus, setBackupStatus] = useState<BackupStatus>({ exportedAt: '', filename: '' });
   const [saving, setSaving] = useState(false);
   const [backupBusy, setBackupBusy] = useState(false);
   const [planEditorOpen, setPlanEditorOpen] = useState(false);
@@ -36,9 +46,14 @@ export default function SettingsScreen() {
   const [planSaving, setPlanSaving] = useState(false);
 
   const load = useCallback(async () => {
-    const [nextProfile, nextPlans] = await Promise.all([getGymProfile(db), getAllPlans(db)]);
+    const [nextProfile, nextPlans, nextBackupStatus] = await Promise.all([
+      getGymProfile(db),
+      getAllPlans(db),
+      getBackupStatus(db),
+    ]);
     setProfile(nextProfile);
     setPlans(nextPlans);
+    setBackupStatus(nextBackupStatus);
   }, [db]);
 
   useFocusEffect(useCallback(() => {
@@ -124,13 +139,83 @@ export default function SettingsScreen() {
     );
   };
 
-  const exportData = async () => {
-    setBackupBusy(true);
+  const discardPreparedBackup = (prepared: PreparedBackup) => {
     try {
-      await exportBackup(db);
+      if (prepared.file.exists) prepared.file.delete();
+    } catch {
+      // Cache cleanup should not hide a completed save, share, or cancellation.
+    }
+  };
+
+  const saveBackupToFolder = async (prepared: PreparedBackup) => {
+    let savedToFolder = false;
+    try {
+      await savePreparedBackup(prepared);
+      savedToFolder = true;
+      await saveBackupStatus(db, prepared.archive.exportedAt, prepared.filename);
+      setBackupStatus({ exportedAt: prepared.archive.exportedAt, filename: prepared.filename });
+      Alert.alert(
+        'Backup saved',
+        `${prepared.filename}\n\n${formatBackupCounts(prepared.summary)}`,
+      );
+    } catch (error) {
+      if (savedToFolder) {
+        Alert.alert(
+          'Backup saved',
+          `${prepared.filename}\n\n${formatBackupCounts(prepared.summary)}\n\nThe file was saved, but its backup history could not be updated.`,
+        );
+        return;
+      }
+      Alert.alert(
+        isPickerCancellation(error) ? 'Folder save cancelled' : 'Backup failed',
+        isPickerCancellation(error)
+          ? 'The backup was not saved to a folder.'
+          : error instanceof Error ? error.message : 'Please try again.',
+      );
+    } finally {
+      discardPreparedBackup(prepared);
+      setBackupBusy(false);
+    }
+  };
+
+  const shareBackup = async (prepared: PreparedBackup) => {
+    try {
+      await sharePreparedBackup(prepared);
+      Alert.alert(
+        'Share sheet completed',
+        `${prepared.filename} was sent to the share sheet. Confirm the destination app completed its save.`,
+      );
     } catch (error) {
       Alert.alert('Backup failed', error instanceof Error ? error.message : 'Please try again.');
     } finally {
+      discardPreparedBackup(prepared);
+      setBackupBusy(false);
+    }
+  };
+
+  const exportData = async () => {
+    setBackupBusy(true);
+    try {
+      const prepared = await prepareBackup(db);
+      Alert.alert(
+        'Backup ready',
+        'Save to a folder for a verified local copy, or open the share sheet to send the file to another app.',
+        [
+          {
+            text: 'Cancel',
+            style: 'cancel',
+            onPress: () => {
+              discardPreparedBackup(prepared);
+              setBackupBusy(false);
+            },
+          },
+          { text: 'Save to folder', onPress: () => { void saveBackupToFolder(prepared); } },
+          { text: 'Share / Drive', onPress: () => { void shareBackup(prepared); } },
+        ],
+        { cancelable: false },
+      );
+    } catch (error) {
+      Alert.alert('Backup failed', error instanceof Error ? error.message : 'Please try again.');
       setBackupBusy(false);
     }
   };
@@ -147,11 +232,17 @@ export default function SettingsScreen() {
           onPress: async () => {
             setBackupBusy(true);
             try {
-              const exportedAt = await restoreBackup(db);
-              if (exportedAt) {
+              const restored = await restoreBackup(db);
+              if (restored) {
                 refreshData();
                 await load();
-                Alert.alert('Backup restored', 'All local gym records were restored successfully.');
+                const skippedPhotos = restored.skippedPhotos
+                  ? `\n\n${restored.skippedPhotos} profile photo${restored.skippedPhotos === 1 ? '' : 's'} could not be restored.`
+                  : '';
+                Alert.alert(
+                  'Backup restored',
+                  `Backup created ${formatBackupDate(restored.exportedAt)}.\n\n${formatBackupCounts(restored.summary)}${skippedPhotos}`,
+                );
               }
             } catch (error) {
               Alert.alert('Restore failed', error instanceof Error ? error.message : 'Please choose a valid backup.');
@@ -213,8 +304,16 @@ export default function SettingsScreen() {
           <Ionicons name="shield-checkmark" size={24} color={palette.emeraldDark} />
           <Text style={styles.backupNoticeText}>Backups include members, plans, payments, attendance, expenses, and gym profile data.</Text>
         </View>
-        <ActionRow icon="cloud-upload-outline" title="Export to Drive" meta="Create a dated JSON backup and choose Google Drive" onPress={exportData} disabled={backupBusy} />
-        <ActionRow icon="cloud-download-outline" title="Restore from backup" meta="Import a backup from Drive or device storage" onPress={confirmRestore} disabled={backupBusy} />
+        {backupStatus.exportedAt ? (
+          <View style={styles.backupStatus}>
+            <Text style={styles.backupStatusTitle}>Last successful backup: {formatBackupDate(backupStatus.exportedAt)}</Text>
+            <Text style={styles.backupStatusFile}>{backupStatus.filename}</Text>
+          </View>
+        ) : (
+          <Text style={styles.backupStatusEmpty}>No verified folder backup has been saved yet.</Text>
+        )}
+        <ActionRow icon="cloud-upload-outline" title="Export backup" meta="Create a verified JSON backup, then save or share it" onPress={exportData} disabled={backupBusy} />
+        <ActionRow icon="cloud-download-outline" title="Restore from backup" meta="Import a JSON backup from device storage" onPress={confirmRestore} disabled={backupBusy} />
       </Section>
 
       <View style={styles.localBadge}>
@@ -246,6 +345,20 @@ export default function SettingsScreen() {
   );
 }
 
+function formatBackupDate(exportedAt: string) {
+  const date = new Date(exportedAt);
+  if (Number.isNaN(date.getTime())) return exportedAt;
+  return date.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function formatBackupCounts(summary: { members: number; payments: number; attendance: number }) {
+  return `${summary.members} member${summary.members === 1 ? '' : 's'}\n${summary.payments} payment${summary.payments === 1 ? '' : 's'}\n${summary.attendance} attendance record${summary.attendance === 1 ? '' : 's'}`;
+}
+
+function isPickerCancellation(error: unknown) {
+  return error instanceof Error && /pick(?:er|ing).*cancelled/i.test(error.message);
+}
+
 function ActionRow({ icon, title, meta, onPress, disabled }: { icon: keyof typeof Ionicons.glyphMap; title: string; meta: string; onPress: () => void; disabled: boolean }) {
   return (
     <Pressable onPress={onPress} disabled={disabled} style={styles.actionRow}>
@@ -271,6 +384,10 @@ const styles = StyleSheet.create({
   reactivateButton: { backgroundColor: palette.blueSoft },
   backupNotice: { flexDirection: 'row', gap: 11, padding: 14, borderRadius: radii.md, backgroundColor: palette.emeraldSoft, marginBottom: 8 },
   backupNoticeText: { flex: 1, color: palette.emeraldDark, fontSize: 12, lineHeight: 18, fontWeight: '600' },
+  backupStatus: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: palette.line },
+  backupStatusTitle: { color: palette.ink, fontSize: 12, fontWeight: '800' },
+  backupStatusFile: { color: palette.muted, fontSize: 11, lineHeight: 16, marginTop: 3 },
+  backupStatusEmpty: { color: palette.muted, fontSize: 11, lineHeight: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: palette.line },
   actionRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: palette.line },
   actionIcon: { width: 44, height: 44, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.emeraldSoft },
   actionCopy: { flex: 1 },

@@ -176,6 +176,17 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase) {
       PRAGMA user_version = 2;
     `);
   }
+
+  if (currentVersion < 3) {
+    await db.execAsync(`
+      CREATE INDEX IF NOT EXISTS idx_memberships_start_end ON memberships(member_id, start_date, end_date);
+      CREATE INDEX IF NOT EXISTS idx_payments_method_date ON payments(method, paid_at);
+      INSERT OR IGNORE INTO settings(key, value) VALUES
+        ('last_backup_at', ''),
+        ('last_backup_file', '');
+      PRAGMA user_version = 3;
+    `);
+  }
 }
 
 export async function getPlans(db: SQLiteDatabase) {
@@ -911,6 +922,38 @@ export async function saveGymProfile(db: SQLiteDatabase, profile: GymProfile) {
         'INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
         key,
         value.trim(),
+      );
+    }
+  });
+}
+
+export type BackupStatus = {
+  exportedAt: string;
+  filename: string;
+};
+
+export async function getBackupStatus(db: SQLiteDatabase): Promise<BackupStatus> {
+  const rows = await db.getAllAsync<{ key: string; value: string }>(
+    "SELECT key, value FROM settings WHERE key IN ('last_backup_at', 'last_backup_file')",
+  );
+  const settings = Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  return {
+    exportedAt: settings.last_backup_at || '',
+    filename: settings.last_backup_file || '',
+  };
+}
+
+export async function saveBackupStatus(db: SQLiteDatabase, exportedAt: string, filename: string) {
+  const entries = [
+    ['last_backup_at', exportedAt],
+    ['last_backup_file', filename],
+  ];
+  await db.withTransactionAsync(async () => {
+    for (const [key, value] of entries) {
+      await db.runAsync(
+        'INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+        key,
+        value,
       );
     }
   });
