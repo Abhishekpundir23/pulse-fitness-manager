@@ -24,6 +24,11 @@ const FILTER_COPY: Record<MemberFilter, { found: string; emptyTitle: string; emp
     emptyTitle: 'No members yet',
     emptyMessage: 'Create the first profile and assign a membership plan.',
   },
+  active: {
+    found: 'active members',
+    emptyTitle: 'No active members',
+    emptyMessage: 'Members with a current membership will appear here.',
+  },
   due: {
     found: 'members with pending dues',
     emptyTitle: 'No pending dues',
@@ -33,6 +38,16 @@ const FILTER_COPY: Record<MemberFilter, { found: string; emptyTitle: string; emp
     found: 'fully paid members',
     emptyTitle: 'No fully paid members',
     emptyMessage: 'Members will appear here once their active plan balance is zero.',
+  },
+  expired: {
+    found: 'expired members',
+    emptyTitle: 'No expired members',
+    emptyMessage: 'Members with an ended membership will appear here.',
+  },
+  cancelled: {
+    found: 'cancelled memberships',
+    emptyTitle: 'No cancelled memberships',
+    emptyMessage: 'Cancelled memberships will appear here.',
   },
 };
 
