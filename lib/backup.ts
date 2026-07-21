@@ -3,93 +3,49 @@ import { Directory, File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import type { SQLiteDatabase } from 'expo-sqlite';
 
-const BACKUP_TABLES = [
-  'settings',
-  'plans',
-  'members',
-  'memberships',
-  'payments',
-  'attendance',
-  'expenses',
-] as const;
+import {
+  BACKUP_APP,
+  BACKUP_TABLES,
+  TABLE_COLUMNS,
+  parseBackupArchive,
+  serializeBackup,
+  summarizeBackup,
+  validateBackupArchive,
+  type BackupArchive,
+  type BackupRow,
+  type BackupSummary,
+  type BackupTable,
+} from '@/lib/backup-archive';
 
-type BackupTable = (typeof BACKUP_TABLES)[number];
-type BackupArchive = {
-  app: 'Pulse Fitness Manager';
-  schemaVersion: 1;
+export type PreparedBackup = {
+  file: File;
+  archive: BackupArchive;
+  filename: string;
+  summary: BackupSummary;
+};
+
+export type RestoreResult = {
   exportedAt: string;
-  data: Record<BackupTable, Record<string, unknown>[]>;
-  memberPhotos?: Record<string, { data: string; extension: string }>;
+  summary: BackupSummary;
+  skippedPhotos: number;
 };
 
-const TABLE_COLUMNS: Record<BackupTable, string[]> = {
-  settings: ['key', 'value'],
-  plans: ['id', 'name', 'duration_months', 'amount', 'active'],
-  members: [
-    'id',
-    'membership_id',
-    'name',
-    'gender',
-    'phone',
-    'email',
-    'date_of_birth',
-    'address',
-    'notes',
-    'photo_uri',
-    'status',
-    'joined_at',
-    'created_at',
-    'updated_at',
-  ],
-  memberships: [
-    'id',
-    'member_id',
-    'plan_id',
-    'start_date',
-    'end_date',
-    'base_amount',
-    'discount_amount',
-    'admission_fee',
-    'total_amount',
-    'paid_amount',
-    'status',
-    'created_at',
-  ],
-  payments: [
-    'id',
-    'member_id',
-    'membership_id',
-    'amount',
-    'method',
-    'paid_at',
-    'note',
-    'created_at',
-  ],
-  attendance: [
-    'id',
-    'member_id',
-    'attendance_date',
-    'check_in_time',
-    'created_at',
-  ],
-  expenses: [
-    'id',
-    'title',
-    'amount',
-    'expense_date',
-    'category',
-    'notes',
-    'created_at',
-  ],
-};
-
-export async function exportBackup(db: SQLiteDatabase) {
-  const data = {} as BackupArchive['data'];
-  for (const table of BACKUP_TABLES) {
-    data[table] = await db.getAllAsync<Record<string, unknown>>(`SELECT * FROM ${table}`);
+function verifySerializedArchive(serialized: string, expected: BackupArchive): BackupArchive {
+  const verified = parseBackupArchive(serialized);
+  if (verified.app !== expected.app || verified.exportedAt !== expected.exportedAt) {
+    throw new Error('Backup verification failed: archive identity changed after writing.');
   }
+  for (const table of BACKUP_TABLES) {
+    if (verified.data[table].length !== expected.data[table].length) {
+      throw new Error(`Backup verification failed: ${table} row count changed after writing.`);
+    }
+  }
+  return verified;
+}
+
+async function collectMemberPhotos(rows: BackupRow[]) {
   const memberPhotos: NonNullable<BackupArchive['memberPhotos']> = {};
-  for (const member of data.members) {
+  for (const member of rows) {
     const uri = typeof member.photo_uri === 'string' ? member.photo_uri : '';
     if (!uri) continue;
     const photo = new File(uri);
@@ -99,70 +55,112 @@ export async function exportBackup(db: SQLiteDatabase) {
       extension: uri.match(/\.([a-zA-Z0-9]+)(?:\?|$)/)?.[1]?.toLowerCase() ?? 'jpg',
     };
   }
-  const archive: BackupArchive = {
-    app: 'Pulse Fitness Manager',
-    schemaVersion: 1,
-    exportedAt: new Date().toISOString(),
-    data,
-    memberPhotos,
-  };
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const file = new File(Paths.cache, `pulse-fitness-backup-${stamp}.json`);
-  file.create({ overwrite: true });
-  file.write(JSON.stringify(archive, null, 2));
+  return memberPhotos;
+}
 
+export async function prepareBackup(db: SQLiteDatabase): Promise<PreparedBackup> {
+  const data = {} as Record<BackupTable, BackupRow[]>;
+  for (const table of BACKUP_TABLES) {
+    data[table] = await db.getAllAsync<BackupRow>(`SELECT * FROM ${table}`);
+  }
+
+  const exportedAt = new Date().toISOString();
+  const archive = validateBackupArchive({
+    app: BACKUP_APP,
+    schemaVersion: 1,
+    exportedAt,
+    data,
+    memberPhotos: await collectMemberPhotos(data.members),
+  });
+  const filename = `pulse-fitness-backup-${exportedAt.replace(/[:.]/g, '-')}.json`;
+  const file = new File(Paths.cache, filename);
+  file.create({ overwrite: true });
+  file.write(serializeBackup(archive));
+
+  const verifiedArchive = verifySerializedArchive(await file.text(), archive);
+  return {
+    file,
+    archive: verifiedArchive,
+    filename,
+    summary: summarizeBackup(verifiedArchive),
+  };
+}
+
+export async function savePreparedBackup(prepared: PreparedBackup): Promise<string> {
+  const directory = await Directory.pickDirectoryAsync();
+  const serialized = serializeBackup(prepared.archive);
+  const destination = directory.createFile(prepared.filename, 'application/json');
+  destination.write(serialized);
+  verifySerializedArchive(await destination.text(), prepared.archive);
+  return destination.uri;
+}
+
+export async function sharePreparedBackup(prepared: PreparedBackup): Promise<void> {
   if (!(await Sharing.isAvailableAsync())) {
     throw new Error('File sharing is unavailable on this device.');
   }
-  await Sharing.shareAsync(file.uri, {
+  verifySerializedArchive(await prepared.file.text(), prepared.archive);
+  await Sharing.shareAsync(prepared.file.uri, {
     mimeType: 'application/json',
-    dialogTitle: 'Save gym backup to Google Drive',
+    dialogTitle: 'Share gym backup',
   });
-  return archive.exportedAt;
 }
 
-function assertArchive(value: unknown): asserts value is BackupArchive {
-  if (!value || typeof value !== 'object') throw new Error('This is not a valid backup file.');
-  const archive = value as Partial<BackupArchive>;
-  if (archive.app !== 'Pulse Fitness Manager' || archive.schemaVersion !== 1 || !archive.data) {
-    throw new Error('This backup is not compatible with this app version.');
-  }
-  for (const table of BACKUP_TABLES) {
-    if (!Array.isArray(archive.data[table])) {
-      throw new Error(`Backup data is missing the ${table} table.`);
-    }
-  }
+// Kept until the settings flow moves to the separate prepare and delivery actions.
+export async function exportBackup(db: SQLiteDatabase) {
+  const prepared = await prepareBackup(db);
+  await sharePreparedBackup(prepared);
+  return prepared.archive.exportedAt;
 }
 
 async function insertRows(
   db: SQLiteDatabase,
   table: BackupTable,
-  rows: Record<string, unknown>[],
+  rows: BackupRow[],
 ) {
   const columns = TABLE_COLUMNS[table];
   const placeholders = columns.map(() => '?').join(', ');
   const sql = `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`;
   for (const row of rows) {
-    await db.runAsync(sql, columns.map((column) => {
-      const value = row[column];
-      return value === undefined ? null : value as string | number | null;
-    }));
+    await db.runAsync(
+      sql,
+      columns.map((column) => {
+        const value = row[column];
+        return value === undefined ? null : value as string | number | null;
+      }),
+    );
   }
 }
 
 async function restoreMemberPhotos(db: SQLiteDatabase, archive: BackupArchive) {
-  if (!archive.memberPhotos) return;
-  const directory = new Directory(Paths.document, 'member-photos');
-  if (!directory.exists) directory.create({ idempotent: true, intermediates: true });
-  for (const [memberId, photo] of Object.entries(archive.memberPhotos)) {
-    const file = new File(directory, `restored-${memberId}-${Date.now()}.${photo.extension}`);
-    file.create({ overwrite: true });
-    file.write(photo.data, { encoding: 'base64' });
-    await db.runAsync('UPDATE members SET photo_uri = ? WHERE id = ?', file.uri, Number(memberId));
+  let skippedPhotos = 0;
+  for (const [memberId, photo] of Object.entries(archive.memberPhotos ?? {})) {
+    let file: File | null = null;
+    try {
+      const directory = new Directory(Paths.document, 'member-photos');
+      if (!directory.exists) directory.create({ idempotent: true, intermediates: true });
+      file = new File(directory, `restored-${memberId}-${Date.now()}.${photo.extension}`);
+      file.create({ overwrite: true });
+      file.write(photo.data, { encoding: 'base64' });
+      await db.runAsync('UPDATE members SET photo_uri = ? WHERE id = ?', file.uri, Number(memberId));
+    } catch {
+      skippedPhotos += 1;
+      try {
+        if (file?.exists) file.delete();
+      } catch {
+        // Photo cleanup must not prevent the remaining photos from being restored.
+      }
+      try {
+        await db.runAsync('UPDATE members SET photo_uri = NULL WHERE id = ?', Number(memberId));
+      } catch {
+        // The row restore is already committed; report the skipped photo without masking it.
+      }
+    }
   }
+  return skippedPhotos;
 }
 
-export async function restoreBackup(db: SQLiteDatabase) {
+export async function restoreBackup(db: SQLiteDatabase): Promise<RestoreResult | null> {
   const result = await DocumentPicker.getDocumentAsync({
     type: ['application/json', 'text/json', 'text/plain'],
     copyToCacheDirectory: true,
@@ -171,29 +169,41 @@ export async function restoreBackup(db: SQLiteDatabase) {
   if (result.canceled) return null;
 
   const file = new File(result.assets[0].uri);
-  const parsed: unknown = JSON.parse(await file.text());
-  assertArchive(parsed);
+  const archive = parseBackupArchive(await file.text());
+  const summary = summarizeBackup(archive);
 
-  await db.execAsync('PRAGMA foreign_keys = OFF;');
-  try {
-    await db.withTransactionAsync(async () => {
-      await db.execAsync(`
-        DELETE FROM attendance;
-        DELETE FROM payments;
-        DELETE FROM memberships;
-        DELETE FROM members;
-        DELETE FROM expenses;
-        DELETE FROM plans;
-        DELETE FROM settings;
-      `);
-      for (const table of BACKUP_TABLES) {
-        await insertRows(db, table, parsed.data[table]);
-      }
-      await restoreMemberPhotos(db, parsed);
-    });
-  } finally {
-    await db.execAsync('PRAGMA foreign_keys = ON;');
+  await db.execAsync('PRAGMA foreign_keys = ON;');
+  const foreignKeys = await db.getFirstAsync<{ foreign_keys: number }>('PRAGMA foreign_keys;');
+  if (foreignKeys?.foreign_keys !== 1) {
+    throw new Error('Restore cannot continue because database foreign keys are disabled.');
   }
+  await db.withTransactionAsync(async () => {
+    await db.execAsync(`
+      DELETE FROM attendance;
+      DELETE FROM payments;
+      DELETE FROM memberships;
+      DELETE FROM members;
+      DELETE FROM expenses;
+      DELETE FROM plans;
+      DELETE FROM settings;
+    `);
 
-  return parsed.exportedAt;
+    await insertRows(db, 'settings', archive.data.settings);
+    await insertRows(db, 'plans', archive.data.plans);
+    await insertRows(
+      db,
+      'members',
+      archive.data.members.map((member) => ({
+        ...member,
+        photo_uri: archive.memberPhotos?.[String(member.id)] ? member.photo_uri : null,
+      })),
+    );
+    await insertRows(db, 'expenses', archive.data.expenses);
+    await insertRows(db, 'memberships', archive.data.memberships);
+    await insertRows(db, 'payments', archive.data.payments);
+    await insertRows(db, 'attendance', archive.data.attendance);
+  });
+
+  const skippedPhotos = await restoreMemberPhotos(db, archive);
+  return { exportedAt: archive.exportedAt, summary, skippedPhotos };
 }
