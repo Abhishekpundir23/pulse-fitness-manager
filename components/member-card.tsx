@@ -3,7 +3,7 @@ import { router } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Avatar } from '@/components/ui-kit';
-import { daysUntil, formatCurrency, formatDate } from '@/lib/format';
+import { formatCurrency, formatDate, todayIso } from '@/lib/format';
 import { palette, radii } from '@/lib/theme';
 import type { MemberListItem } from '@/lib/types';
 
@@ -14,10 +14,18 @@ export function MemberCard({
   member: MemberListItem;
   compact?: boolean;
 }) {
-  const days = daysUntil(member.end_date);
-  const expired = days !== null && days < 0;
-  const warning = days !== null && days >= 0 && days <= 7;
-  const cancelled = member.membership_status === 'cancelled';
+  const historical = member.snapshot_date < todayIso();
+  const cancelled = member.snapshot_status === 'cancelled';
+  const expired = member.snapshot_status === 'expired';
+  const warning = member.snapshot_status === 'active' && member.end_date === member.snapshot_date;
+  const planLine = `${historical ? `As of ${formatDate(member.snapshot_date)} · ` : ''}${member.plan_name ?? 'No plan'}`;
+  const statusCopy = cancelled
+    ? 'Membership cancelled'
+    : expired
+      ? `Expired ${formatDate(member.end_date, { day: '2-digit', month: 'short' })}`
+      : member.snapshot_status === 'active'
+        ? `Ends ${formatDate(member.end_date, { day: '2-digit', month: 'short' })}`
+        : 'No membership';
 
   return (
     <Pressable
@@ -35,27 +43,22 @@ export function MemberCard({
           )}
         </View>
         <Text style={styles.meta}>
-          {member.membership_id}  ·  {member.plan_name ?? 'No plan'}
+          {member.membership_id}  ·  {planLine}
         </Text>
         {!compact && (
           <View style={styles.footer}>
             <View style={styles.footerItem}>
               <Ionicons name="calendar-outline" size={15} color={palette.muted} />
               <Text style={[styles.footerText, (expired || warning) && styles.warningText]}>
-                {cancelled
-                  ? 'Membership cancelled'
-                  : `${expired ? 'Expired ' : 'Ends '}${formatDate(member.end_date, {
-                    day: '2-digit',
-                    month: 'short',
-                  })}`}
+                {statusCopy}
               </Text>
             </View>
             <Text style={[
               styles.due,
               member.due_amount === 0 && styles.paid,
-              cancelled && styles.cancelled,
+              (cancelled || member.snapshot_status === 'none') && styles.cancelled,
             ]}>
-              {cancelled
+              {cancelled || member.snapshot_status === 'none'
                 ? 'No due'
                 : member.due_amount > 0
                   ? `${formatCurrency(member.due_amount)} due`

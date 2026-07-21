@@ -6,16 +6,21 @@ import { useCallback, useEffect, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { MemberCard } from '@/components/member-card';
+import { MonthFilter } from '@/components/month-filter';
 import { Chip, EmptyState, LoadingView, Screen, SearchBox, TopBar } from '@/components/ui-kit';
 import { useAppData } from '@/contexts/app-data';
 import { getMembers } from '@/lib/database';
+import { currentMonthKey, snapshotDateForMonth } from '@/lib/history-period';
 import { palette, radii, shadows } from '@/lib/theme';
 import type { MemberFilter, MemberListItem } from '@/lib/types';
 
 const FILTERS = [
   { key: 'all', label: 'All', icon: 'people-outline' },
-  { key: 'due', label: 'Pending dues', icon: 'alert-circle-outline' },
+  { key: 'active', label: 'Active', icon: 'fitness-outline' },
+  { key: 'due', label: 'Pending', icon: 'alert-circle-outline' },
   { key: 'paid', label: 'Paid', icon: 'checkmark-circle-outline' },
+  { key: 'expired', label: 'Expired', icon: 'calendar-outline' },
+  { key: 'cancelled', label: 'Cancelled', icon: 'close-circle-outline' },
 ] as const;
 
 const FILTER_COPY: Record<MemberFilter, { found: string; emptyTitle: string; emptyMessage: string }> = {
@@ -53,7 +58,7 @@ const FILTER_COPY: Record<MemberFilter, { found: string; emptyTitle: string; emp
 
 function normalizeFilter(value: unknown): MemberFilter {
   const next = Array.isArray(value) ? value[0] : value;
-  return next === 'due' || next === 'paid' ? next : 'all';
+  return FILTERS.some((item) => item.key === next) ? next as MemberFilter : 'all';
 }
 
 export default function MembersScreen() {
@@ -62,11 +67,13 @@ export default function MembersScreen() {
   const { revision } = useAppData();
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<MemberFilter>(normalizeFilter(params.filter));
+  const [monthKey, setMonthKey] = useState(currentMonthKey);
   const [members, setMembers] = useState<MemberListItem[] | null>(null);
+  const snapshotDate = snapshotDateForMonth(monthKey);
 
   const load = useCallback(async () => {
-    setMembers(await getMembers(db, search, filter));
-  }, [db, filter, search]);
+    setMembers(await getMembers(db, search, filter, snapshotDate));
+  }, [db, filter, search, snapshotDate]);
 
   useEffect(() => {
     setFilter(normalizeFilter(params.filter));
@@ -83,53 +90,54 @@ export default function MembersScreen() {
   }, [load]);
 
   const copy = FILTER_COPY[filter];
+  const emptyState = members === null ? (
+    <View style={styles.emptyWrap}>
+      <LoadingView />
+    </View>
+  ) : (
+    <View style={styles.emptyWrap}>
+      <EmptyState
+        icon={search ? 'search-outline' : filter === 'due' ? 'wallet-outline' : 'people-outline'}
+        title={search ? 'No matching members' : copy.emptyTitle}
+        message={search ? 'Try a different name, phone number, or member ID.' : copy.emptyMessage}
+      />
+    </View>
+  );
 
   return (
-    <Screen scroll={false}>
-      <TopBar
-        eyebrow="Member directory"
-        title="Members"
-        subtitle={members ? `${members.length} ${copy.found}` : 'Loading profiles'}
-      />
-      <SearchBox value={search} onChangeText={setSearch} placeholder="Name, phone or member ID" />
-      <View style={styles.filterRow}>
-        {FILTERS.map((item) => (
-          <Chip
-            key={item.key}
-            label={item.label}
-            icon={item.icon}
-            selected={filter === item.key}
-            onPress={() => setFilter(item.key)}
-          />
-        ))}
-      </View>
-      <View style={styles.listArea}>
-        {members === null ? (
-          <LoadingView />
-        ) : members.length === 0 ? (
-          <View style={styles.emptyWrap}>
-            <EmptyState
-              icon={search ? 'search-outline' : filter === 'due' ? 'wallet-outline' : 'people-outline'}
-              title={search ? 'No matching members' : copy.emptyTitle}
-              message={
-                search
-                  ? 'Try a different name, phone number, or member ID.'
-                  : copy.emptyMessage
-              }
+    <Screen scroll={false} contentContainerStyle={styles.screen}>
+      <FlatList
+        data={members ?? []}
+        keyExtractor={(member) => String(member.id)}
+        renderItem={({ item }) => <MemberCard member={item} />}
+        ListHeaderComponent={(
+          <>
+            <TopBar
+              eyebrow="Member directory"
+              title="Members"
+              subtitle={members ? `${members.length} ${copy.found}` : 'Loading profiles'}
             />
-          </View>
-        ) : (
-          <FlatList
-            data={members}
-            keyExtractor={(member) => String(member.id)}
-            renderItem={({ item }) => <MemberCard member={item} />}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-            style={styles.memberList}
-            contentContainerStyle={styles.listContent}
-          />
+            <SearchBox value={search} onChangeText={setSearch} placeholder="Name, phone or member ID" />
+            <MonthFilter value={monthKey} onChange={(value) => setMonthKey(value ?? currentMonthKey())} />
+            <View style={styles.filterRow}>
+              {FILTERS.map((item) => (
+                <Chip
+                  key={item.key}
+                  label={item.label}
+                  icon={item.icon}
+                  selected={filter === item.key}
+                  onPress={() => setFilter(item.key)}
+                />
+              ))}
+            </View>
+          </>
         )}
-      </View>
+        ListEmptyComponent={emptyState}
+        contentInsetAdjustmentBehavior="automatic"
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.listContent}
+      />
       <Pressable
         onPress={() => router.push('/member/new')}
         style={({ pressed }) => [styles.fab, pressed && styles.pressed]}>
@@ -141,11 +149,10 @@ export default function MembersScreen() {
 }
 
 const styles = StyleSheet.create({
+  screen: { flex: 1, paddingBottom: 0 },
   filterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 },
-  listArea: { flex: 1, marginHorizontal: -18 },
-  memberList: { flex: 1 },
-  listContent: { paddingHorizontal: 18, paddingBottom: 110 },
-  emptyWrap: { flex: 1, paddingHorizontal: 18, justifyContent: 'center' },
+  listContent: { flexGrow: 1, paddingBottom: 130 },
+  emptyWrap: { flex: 1, minHeight: 220, justifyContent: 'center' },
   fab: {
     position: 'absolute',
     right: 18,
