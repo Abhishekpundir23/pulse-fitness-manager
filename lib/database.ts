@@ -2,6 +2,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 
 import { addMonths, todayIso } from '@/lib/format';
 import { buildMemberSnapshotQuery } from '@/lib/member-query';
+import { buildPaymentHistoryQuery } from '@/lib/payment-query';
 import type {
   CreateMembershipInput,
   CreateMemberInput,
@@ -12,6 +13,9 @@ import type {
   MemberFilter,
   MemberListItem,
   PaymentMethod,
+  PaymentHistoryFilters,
+  PaymentHistoryItem,
+  PaymentHistoryResult,
   Plan,
   ReportData,
   UpdateMemberInput,
@@ -837,6 +841,19 @@ export async function getReportData(db: SQLiteDatabase): Promise<ReportData> {
     paymentMethods,
     recentPayments,
     recentExpenses,
+  };
+}
+
+export async function getPaymentHistory(
+  db: SQLiteDatabase,
+  filters: PaymentHistoryFilters,
+): Promise<PaymentHistoryResult> {
+  const query = buildPaymentHistoryQuery(filters);
+  const items = await db.getAllAsync<PaymentHistoryItem>(query.sql, ...query.args);
+  return {
+    items,
+    count: items.length,
+    total: items.reduce((sum, item) => sum + item.amount, 0),
   };
 }
 

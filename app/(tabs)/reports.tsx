@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback, useState } from 'react';
+import { router } from 'expo-router';
 import { Alert, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { DateField, FormField, LoadingView, PrimaryButton, Screen, Section, StatCard, TopBar } from '@/components/ui-kit';
@@ -180,12 +181,23 @@ export default function ReportsScreen() {
         )}
       </Section>
 
-      <Section title="Recent payments">
+      <Section
+        title="Recent payments"
+        action={(
+          <Pressable onPress={() => router.push('/payments')}>
+            <Text style={styles.textAction}>View all</Text>
+          </Pressable>
+        )}>
         {report.recentPayments.length === 0 ? (
           <Text style={styles.muted}>No payments recorded yet.</Text>
         ) : (
           report.recentPayments.map((payment) => (
-            <View key={payment.id} style={styles.paymentRow}>
+            <Pressable
+              key={payment.id}
+              accessibilityRole="button"
+              accessibilityLabel={`Open ${payment.member_name}`}
+              onPress={() => router.push(`/member/${payment.member_id}`)}
+              style={({ pressed }) => [styles.paymentRow, pressed && styles.pressed]}>
               <View style={styles.paymentIcon}>
                 <Ionicons name="arrow-down" size={17} color={palette.emeraldDark} />
               </View>
@@ -194,7 +206,7 @@ export default function ReportsScreen() {
                 <Text style={styles.paymentMeta}>{payment.method} · {formatDate(payment.paid_at)}</Text>
               </View>
               <Text style={styles.paymentAmount}>{formatCurrency(payment.amount)}</Text>
-            </View>
+            </Pressable>
           ))
         )}
       </Section>
@@ -250,6 +262,8 @@ const styles = StyleSheet.create({
   paymentName: { color: palette.ink, fontSize: 14, fontWeight: '800' },
   paymentMeta: { color: palette.muted, fontSize: 11, marginTop: 4 },
   paymentAmount: { color: palette.emeraldDark, fontSize: 14, fontWeight: '900' },
+  textAction: { color: palette.emeraldDark, fontSize: 13, fontWeight: '800' },
+  pressed: { opacity: 0.72 },
   muted: { color: palette.muted, lineHeight: 20, textAlign: 'center', paddingVertical: 16 },
   addExpenseButton: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 11, borderRadius: radii.pill, backgroundColor: palette.emeraldDark },
   addExpenseText: { color: palette.white, fontSize: 10, fontWeight: '800' },

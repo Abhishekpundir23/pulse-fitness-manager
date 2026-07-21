@@ -1,0 +1,132 @@
+import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
+import { router } from 'expo-router';
+import { useSQLiteContext } from 'expo-sqlite';
+import { useCallback, useEffect, useState } from 'react';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+
+import { MonthFilter } from '@/components/month-filter';
+import { Chip, EmptyState, LoadingView, Screen, SearchBox, TopBar } from '@/components/ui-kit';
+import { useAppData } from '@/contexts/app-data';
+import { getPaymentHistory } from '@/lib/database';
+import { formatCurrency, formatDate } from '@/lib/format';
+import { palette, radii, shadows } from '@/lib/theme';
+import type { PaymentHistoryMethod, PaymentHistoryResult } from '@/lib/types';
+
+const METHODS: PaymentHistoryMethod[] = ['all', 'Cash', 'UPI', 'Card', 'Bank transfer'];
+
+export default function PaymentHistoryScreen() {
+  const db = useSQLiteContext();
+  const { revision } = useAppData();
+  const [search, setSearch] = useState('');
+  const [month, setMonth] = useState<string | null>(null);
+  const [method, setMethod] = useState<PaymentHistoryMethod>('all');
+  const [history, setHistory] = useState<PaymentHistoryResult | null>(null);
+
+  const load = useCallback(async () => {
+    setHistory(await getPaymentHistory(db, { search, month, method }));
+  }, [db, method, month, search]);
+
+  useFocusEffect(useCallback(() => {
+    void revision;
+    load();
+  }, [load, revision]));
+
+  useEffect(() => {
+    const timer = setTimeout(load, 180);
+    return () => clearTimeout(timer);
+  }, [load]);
+
+  const emptyState = history === null ? (
+    <View style={styles.emptyWrap}><LoadingView /></View>
+  ) : (
+    <View style={styles.emptyWrap}>
+      <EmptyState
+        icon={search || month || method !== 'all' ? 'search-outline' : 'receipt-outline'}
+        title={search || month || method !== 'all' ? 'No matching payments' : 'No payments recorded'}
+        message={search || month || method !== 'all'
+          ? 'Try another member, month, or payment method.'
+          : 'Recorded payments will appear here.'}
+      />
+    </View>
+  );
+
+  return (
+    <Screen scroll={false} contentContainerStyle={styles.screen}>
+      <FlatList
+        data={history?.items ?? []}
+        keyExtractor={(payment) => String(payment.id)}
+        renderItem={({ item }) => (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Open ${item.member_name}`}
+            onPress={() => router.push(`/member/${item.member_id}`)}
+            style={({ pressed }) => [styles.paymentRow, pressed && styles.pressed]}>
+            <View style={styles.paymentIcon}>
+              <Ionicons name="arrow-down" size={17} color={palette.emeraldDark} />
+            </View>
+            <View style={styles.paymentCopy}>
+              <Text style={styles.paymentName}>{item.member_name}</Text>
+              <Text style={styles.paymentMeta}>{item.member_code} · {item.method} · {formatDate(item.paid_at)}</Text>
+            </View>
+            <Text style={styles.paymentAmount}>{formatCurrency(item.amount)}</Text>
+          </Pressable>
+        )}
+        ListHeaderComponent={(
+          <>
+            <TopBar
+              eyebrow="Collections"
+              title="Payment history"
+              subtitle={history ? `${history.count} payment${history.count === 1 ? '' : 's'} found` : 'Loading payments'}
+            />
+            <SearchBox value={search} onChangeText={setSearch} placeholder="Name, phone or member ID" />
+            <MonthFilter value={month} onChange={setMonth} allowAllTime />
+            <View style={styles.filterRow}>
+              {METHODS.map((item) => (
+                <Chip
+                  key={item}
+                  label={item === 'all' ? 'All methods' : item}
+                  selected={method === item}
+                  onPress={() => setMethod(item)}
+                />
+              ))}
+            </View>
+            <View style={styles.summaryCard}>
+              <View>
+                <Text style={styles.summaryLabel}>Filtered collection</Text>
+                <Text style={styles.summaryCount}>{history?.count ?? 0} payment{history?.count === 1 ? '' : 's'}</Text>
+              </View>
+              <Text style={styles.summaryTotal}>{formatCurrency(history?.total ?? 0)}</Text>
+            </View>
+          </>
+        )}
+        ListEmptyComponent={emptyState}
+        contentInsetAdjustmentBehavior="automatic"
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.listContent}
+      />
+    </Screen>
+  );
+}
+
+const styles = StyleSheet.create({
+  screen: { flex: 1, paddingBottom: 0 },
+  listContent: { flexGrow: 1, paddingBottom: 42 },
+  filterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 },
+  summaryCard: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 14,
+    marginBottom: 6, padding: 18, borderRadius: radii.xl, backgroundColor: palette.ink, ...shadows.card,
+  },
+  summaryLabel: { color: '#A8B5C0', fontSize: 12, fontWeight: '700' },
+  summaryCount: { color: palette.white, fontSize: 16, fontWeight: '800', marginTop: 5 },
+  summaryTotal: { color: palette.white, fontSize: 23, fontWeight: '900' },
+  paymentRow: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: palette.line },
+  paymentIcon: { width: 38, height: 38, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.emeraldSoft },
+  paymentCopy: { flex: 1 },
+  paymentName: { color: palette.ink, fontSize: 14, fontWeight: '800' },
+  paymentMeta: { color: palette.muted, fontSize: 11, marginTop: 4 },
+  paymentAmount: { color: palette.emeraldDark, fontSize: 14, fontWeight: '900' },
+  emptyWrap: { flex: 1, minHeight: 220, justifyContent: 'center' },
+  pressed: { opacity: 0.75 },
+});

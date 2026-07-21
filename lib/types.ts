@@ -55,6 +55,23 @@ export type Payment = {
   created_at: string;
 };
 
+export type PaymentHistoryMethod = 'all' | PaymentMethod;
+export type PaymentHistoryFilters = {
+  search: string;
+  month: string | null;
+  method: PaymentHistoryMethod;
+};
+export type PaymentHistoryItem = Payment & {
+  member_name: string;
+  member_phone: string;
+  member_code: string;
+};
+export type PaymentHistoryResult = {
+  items: PaymentHistoryItem[];
+  count: number;
+  total: number;
+};
+
 export type MemberDetail = MemberListItem & {
   email: string | null;
   date_of_birth: string | null;

@@ -43,6 +43,7 @@ export default function RootLayout() {
             <Stack.Screen name="member/edit/[id]" options={{ title: 'Edit member' }} />
             <Stack.Screen name="membership/[memberId]" options={{ title: 'Membership plan' }} />
             <Stack.Screen name="payment/[memberId]" options={{ title: 'Record payment' }} />
+            <Stack.Screen name="payments" options={{ title: 'Payment history' }} />
           </Stack>
           <StatusBar style="dark" />
         </ThemeProvider>
