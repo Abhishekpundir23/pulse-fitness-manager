@@ -125,11 +125,13 @@ export function StatCard({
   label,
   value,
   tone = 'green',
+  onPress,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
   value: string;
   tone?: 'green' | 'amber' | 'blue' | 'red';
+  onPress?: () => void;
 }) {
   const toneMap = {
     green: [palette.emeraldSoft, palette.emeraldDark],
@@ -137,8 +139,8 @@ export function StatCard({
     blue: [palette.blueSoft, palette.blue],
     red: [palette.redSoft, palette.red],
   } as const;
-  return (
-    <View style={styles.statCard}>
+  const content = (
+    <>
       <View style={[styles.statIcon, { backgroundColor: toneMap[tone][0] }]}>
         <Ionicons name={icon} size={21} color={toneMap[tone][1]} />
       </View>
@@ -146,6 +148,23 @@ export function StatCard({
         {value}
       </Text>
       <Text style={styles.statLabel}>{label}</Text>
+    </>
+  );
+
+  if (onPress) {
+    return (
+      <Pressable
+        accessibilityRole="button"
+        onPress={onPress}
+        style={({ pressed }) => [styles.statCard, pressed && styles.pressed]}>
+        {content}
+      </Pressable>
+    );
+  }
+
+  return (
+    <View style={styles.statCard}>
+      {content}
     </View>
   );
 }
@@ -534,4 +553,3 @@ const styles = StyleSheet.create({
   searchInput: { flex: 1, color: palette.ink, fontSize: 16 },
   loading: { minHeight: 220, alignItems: 'center', justifyContent: 'center' },
 });
-

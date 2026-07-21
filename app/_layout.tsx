@@ -41,7 +41,7 @@ export default function RootLayout() {
             <Stack.Screen name="member/new" options={{ title: 'Add member' }} />
             <Stack.Screen name="member/[id]" options={{ title: 'Member details' }} />
             <Stack.Screen name="member/edit/[id]" options={{ title: 'Edit member' }} />
-            <Stack.Screen name="membership/[memberId]" options={{ title: 'New membership' }} />
+            <Stack.Screen name="membership/[memberId]" options={{ title: 'Membership plan' }} />
             <Stack.Screen name="payment/[memberId]" options={{ title: 'Record payment' }} />
           </Stack>
           <StatusBar style="dark" />

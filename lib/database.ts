@@ -8,6 +8,7 @@ import type {
   Expense,
   GymProfile,
   MemberDetail,
+  MemberFilter,
   MemberListItem,
   PaymentMethod,
   Plan,
@@ -25,6 +26,7 @@ const MEMBER_LIST_QUERY = `
     m.photo_uri,
     m.status,
     m.joined_at,
+    ms.plan_id,
     p.name AS plan_name,
     ms.status AS membership_status,
     ms.end_date,
@@ -50,9 +52,10 @@ const MEMBER_LIST_QUERY = `
 export async function migrateDbIfNeeded(db: SQLiteDatabase) {
   await db.execAsync('PRAGMA foreign_keys = ON;');
   const result = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
-  if ((result?.user_version ?? 0) >= 1) return;
+  const currentVersion = result?.user_version ?? 0;
 
-  await db.execAsync(`
+  if (currentVersion < 1) {
+    await db.execAsync(`
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY NOT NULL,
       value TEXT NOT NULL
@@ -160,6 +163,14 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase) {
 
     PRAGMA user_version = 1;
   `);
+  }
+
+  if (currentVersion < 2) {
+    await db.execAsync(`
+      CREATE INDEX IF NOT EXISTS idx_members_phone ON members(phone);
+      PRAGMA user_version = 2;
+    `);
+  }
 }
 
 export async function getPlans(db: SQLiteDatabase) {
@@ -240,12 +251,42 @@ export async function setPlanActive(db: SQLiteDatabase, planId: number, active: 
   if (result.changes === 0) throw new Error('This membership plan could not be found.');
 }
 
-export async function getMembers(db: SQLiteDatabase, search = '') {
+function normalizePhone(value: string) {
+  return value.replace(/\D/g, '');
+}
+
+async function assertUniquePhone(db: SQLiteDatabase, phone: string, excludedMemberId?: number) {
+  const existing = await db.getFirstAsync<{ id: number; name: string }>(
+    `SELECT id, name FROM members
+     WHERE phone = ?
+       AND (? IS NULL OR id != ?)
+     LIMIT 1`,
+    phone,
+    excludedMemberId ?? null,
+    excludedMemberId ?? null,
+  );
+  if (existing) {
+    throw new Error(`This mobile number is already used by ${existing.name}.`);
+  }
+}
+
+function memberFilterSql(filter: MemberFilter) {
+  if (filter === 'due') {
+    return "AND ms.status = 'active' AND MAX(COALESCE(ms.total_amount, 0) - COALESCE(ms.paid_amount, 0), 0) > 0";
+  }
+  if (filter === 'paid') {
+    return "AND ms.status = 'active' AND COALESCE(ms.total_amount, 0) > 0 AND MAX(COALESCE(ms.total_amount, 0) - COALESCE(ms.paid_amount, 0), 0) = 0";
+  }
+  return '';
+}
+
+export async function getMembers(db: SQLiteDatabase, search = '', filter: MemberFilter = 'all') {
   const normalized = `%${search.trim()}%`;
   return db.getAllAsync<MemberListItem>(
     `${MEMBER_LIST_QUERY}
      WHERE m.status != 'archived'
        AND (m.name LIKE ? OR m.phone LIKE ? OR m.membership_id LIKE ?)
+       ${memberFilterSql(filter)}
      ORDER BY m.created_at DESC`,
     todayIso(),
     normalized,
@@ -265,6 +306,7 @@ export async function getMemberDetail(db: SQLiteDatabase, memberId: number) {
       m.photo_uri,
       m.status,
       m.joined_at,
+      ms.plan_id,
       p.name AS plan_name,
       ms.status AS membership_status,
       ms.end_date,
@@ -315,6 +357,8 @@ export async function getMemberDetail(db: SQLiteDatabase, memberId: number) {
 export async function createMember(db: SQLiteDatabase, input: CreateMemberInput) {
   const plan = await db.getFirstAsync<Plan>('SELECT * FROM plans WHERE id = ?', input.planId);
   if (!plan) throw new Error('The selected plan no longer exists.');
+  const phone = normalizePhone(input.phone);
+  await assertUniquePhone(db, phone);
 
   const nextId = await db.getFirstAsync<{ next_id: number }>(
     'SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM members',
@@ -335,7 +379,7 @@ export async function createMember(db: SQLiteDatabase, input: CreateMemberInput)
       membershipCode,
       input.name.trim(),
       input.gender,
-      input.phone.trim(),
+      phone,
       input.email?.trim() || null,
       input.dateOfBirth || null,
       input.address?.trim() || null,
@@ -382,6 +426,9 @@ export async function updateMemberProfile(
   memberId: number,
   input: UpdateMemberInput,
 ) {
+  const phone = normalizePhone(input.phone);
+  await assertUniquePhone(db, phone, memberId);
+
   await db.withTransactionAsync(async () => {
     const result = await db.runAsync(
       `UPDATE members
@@ -390,7 +437,7 @@ export async function updateMemberProfile(
        WHERE id = ?`,
       input.name.trim(),
       input.gender,
-      input.phone.trim(),
+      phone,
       input.email?.trim() || null,
       input.dateOfBirth || null,
       input.address?.trim() || null,
@@ -488,6 +535,55 @@ export async function createMembership(db: SQLiteDatabase, input: CreateMembersh
   });
 
   return membershipId;
+}
+
+export async function changeMembershipPlan(
+  db: SQLiteDatabase,
+  memberId: number,
+  membershipId: number,
+  planId: number,
+) {
+  const [membership, plan] = await Promise.all([
+    db.getFirstAsync<{
+      id: number;
+      start_date: string;
+      paid_amount: number;
+      discount_amount: number;
+      admission_fee: number;
+      status: string;
+    }>(
+      `SELECT id, start_date, paid_amount, discount_amount, admission_fee, status
+       FROM memberships
+       WHERE id = ? AND member_id = ?`,
+      membershipId,
+      memberId,
+    ),
+    db.getFirstAsync<Plan>('SELECT * FROM plans WHERE id = ? AND active = 1', planId),
+  ]);
+
+  if (!membership) throw new Error('Membership not found.');
+  if (membership.status !== 'active') {
+    throw new Error('Only an active membership plan can be changed.');
+  }
+  if (!plan) throw new Error('The selected plan is no longer active.');
+
+  const discount = Math.max(0, membership.discount_amount || 0);
+  const admissionFee = Math.max(0, membership.admission_fee || 0);
+  const plannedTotal = Math.max(0, plan.amount - discount + admissionFee);
+  const totalAmount = Math.max(plannedTotal, membership.paid_amount);
+
+  const result = await db.runAsync(
+    `UPDATE memberships
+     SET plan_id = ?, end_date = ?, base_amount = ?, total_amount = ?
+     WHERE id = ? AND member_id = ? AND status = 'active'`,
+    plan.id,
+    addMonths(membership.start_date, plan.duration_months),
+    plan.amount,
+    totalAmount,
+    membershipId,
+    memberId,
+  );
+  if (result.changes === 0) throw new Error('This membership is no longer active.');
 }
 
 export async function addPayment(

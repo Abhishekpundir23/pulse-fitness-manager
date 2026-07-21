@@ -2,6 +2,7 @@ export type Gender = 'Male' | 'Female' | 'Other';
 export type MemberStatus = 'active' | 'blocked' | 'archived';
 export type MembershipStatus = 'active' | 'expired' | 'frozen' | 'cancelled';
 export type PaymentMethod = 'Cash' | 'UPI' | 'Card' | 'Bank transfer';
+export type MemberFilter = 'all' | 'due' | 'paid';
 
 export type Plan = {
   id: number;
@@ -30,6 +31,7 @@ export type MemberListItem = {
   photo_uri: string | null;
   status: MemberStatus;
   joined_at: string;
+  plan_id: number | null;
   plan_name: string | null;
   membership_status: MembershipStatus | null;
   end_date: string | null;

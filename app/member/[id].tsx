@@ -301,6 +301,16 @@ export default function MemberDetailScreen() {
             />
           </View>
         )}
+        {member.membership_status === 'active' && !planExpired && (
+          <View style={styles.renewButton}>
+            <PrimaryButton
+              label="Change current plan"
+              icon="swap-horizontal"
+              variant="secondary"
+              onPress={() => router.push(`/membership/${member.id}?mode=change` as never)}
+            />
+          </View>
+        )}
         <View style={styles.buttonRow}>
           <View style={styles.buttonHalf}>
             <PrimaryButton

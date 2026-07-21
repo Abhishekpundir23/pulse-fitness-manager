@@ -97,8 +97,14 @@ export default function DashboardScreen() {
       <View style={styles.statsGrid}>
         <StatCard icon="people" label="Active members" value={String(stats.activeMembers)} />
         <StatCard icon="time" label="Expiring in 7 days" value={String(stats.expiringSoon)} tone="amber" />
-        <StatCard icon="person-add" label="All members" value={String(stats.totalMembers)} tone="blue" />
-        <StatCard icon="alert-circle" label="Pending dues" value={formatCurrency(stats.outstandingDue)} tone="red" />
+        <StatCard icon="person-add" label="All members" value={String(stats.totalMembers)} tone="blue" onPress={() => router.push('/members')} />
+        <StatCard
+          icon="alert-circle"
+          label="Pending dues"
+          value={formatCurrency(stats.outstandingDue)}
+          tone="red"
+          onPress={() => router.push('/members?filter=due' as never)}
+        />
       </View>
 
       <Section title="Attendance pulse" subtitle="Check-ins during the last seven days">

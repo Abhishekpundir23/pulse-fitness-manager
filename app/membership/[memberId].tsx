@@ -5,14 +5,15 @@ import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Chip, DateField, FormField, LoadingView, PrimaryButton, Screen, Section } from '@/components/ui-kit';
 import { useAppData } from '@/contexts/app-data';
-import { createMembership, getMemberDetail, getPlans } from '@/lib/database';
-import { formatCurrency, todayIso } from '@/lib/format';
+import { changeMembershipPlan, createMembership, getMemberDetail, getPlans } from '@/lib/database';
+import { addMonths, formatCurrency, formatDate, todayIso } from '@/lib/format';
 import { palette, radii } from '@/lib/theme';
 import type { MemberDetail, PaymentMethod, Plan } from '@/lib/types';
 
 export default function NewMembershipScreen() {
-  const params = useLocalSearchParams<{ memberId: string }>();
+  const params = useLocalSearchParams<{ memberId: string; mode?: string }>();
   const memberId = Number(params.memberId);
+  const changingCurrent = params.mode === 'change';
   const db = useSQLiteContext();
   const { refreshData } = useAppData();
   const [member, setMember] = useState<MemberDetail | null>(null);
@@ -29,41 +30,69 @@ export default function NewMembershipScreen() {
     Promise.all([getMemberDetail(db, memberId), getPlans(db)]).then(([nextMember, nextPlans]) => {
       setMember(nextMember);
       setPlans(nextPlans);
-      setPlanId(nextPlans[0]?.id ?? null);
+      setPlanId(
+        changingCurrent && nextMember?.plan_id
+          ? nextMember.plan_id
+          : nextPlans[0]?.id ?? null,
+      );
     });
-  }, [db, memberId]);
+  }, [changingCurrent, db, memberId]);
 
   const selectedPlan = plans?.find((plan) => plan.id === planId);
   const total = useMemo(
     () => Math.max(0, (selectedPlan?.amount ?? 0) - (Number(discount) || 0) + (Number(admissionFee) || 0)),
     [selectedPlan, discount, admissionFee],
   );
-  const due = Math.max(0, total - (Number(initialPayment) || 0));
+  const changedPlanTotal = useMemo(() => {
+    if (!changingCurrent || !member || !selectedPlan) return total;
+    const plannedTotal = Math.max(
+      0,
+      selectedPlan.amount - member.discount_amount + member.admission_fee,
+    );
+    return Math.max(plannedTotal, member.paid_amount);
+  }, [changingCurrent, member, selectedPlan, total]);
+  const payableTotal = changingCurrent ? changedPlanTotal : total;
+  const paidForDue = changingCurrent ? member?.paid_amount ?? 0 : Number(initialPayment) || 0;
+  const due = Math.max(0, payableTotal - paidForDue);
+  const projectedEndDate = changingCurrent && member?.start_date && selectedPlan
+    ? addMonths(member.start_date, selectedPlan.duration_months)
+    : null;
 
   const save = async () => {
     if (!planId) {
       Alert.alert('Plan required', 'Choose a membership plan.');
       return;
     }
-    if ((Number(initialPayment) || 0) > total) {
+    if (changingCurrent && (!member || !member.membership_row_id)) {
+      Alert.alert('No active membership', 'This member does not have a plan that can be changed.');
+      return;
+    }
+    if (!changingCurrent && (Number(initialPayment) || 0) > total) {
       Alert.alert('Payment is too high', 'Opening payment cannot exceed the final plan amount.');
       return;
     }
     setSaving(true);
     try {
-      await createMembership(db, {
-        memberId,
-        planId,
-        joiningDate,
-        discountAmount: Number(discount) || 0,
-        admissionFee: Number(admissionFee) || 0,
-        initialPayment: Number(initialPayment) || 0,
-        paymentMethod,
-      });
+      if (changingCurrent) {
+        await changeMembershipPlan(db, memberId, member!.membership_row_id!, planId);
+      } else {
+        await createMembership(db, {
+          memberId,
+          planId,
+          joiningDate,
+          discountAmount: Number(discount) || 0,
+          admissionFee: Number(admissionFee) || 0,
+          initialPayment: Number(initialPayment) || 0,
+          paymentMethod,
+        });
+      }
       refreshData();
       router.back();
     } catch (error) {
-      Alert.alert('Could not assign plan', error instanceof Error ? error.message : 'Please try again.');
+      Alert.alert(
+        changingCurrent ? 'Could not change plan' : 'Could not assign plan',
+        error instanceof Error ? error.message : 'Please try again.',
+      );
     } finally {
       setSaving(false);
     }
@@ -74,12 +103,20 @@ export default function NewMembershipScreen() {
   return (
     <Screen>
       <View style={styles.memberCard}>
-        <Text style={styles.memberLabel}>Assigning a new membership to</Text>
+        <Text style={styles.memberLabel}>
+          {changingCurrent ? 'Changing current membership for' : 'Assigning a new membership to'}
+        </Text>
         <Text style={styles.memberName}>{member.name}</Text>
         <Text style={styles.memberMeta}>{member.membership_id} · Current plan: {member.plan_name ?? 'None'}</Text>
       </View>
 
-      <Section title="Choose plan" subtitle="Only active plans are available">
+      <Section
+        title={changingCurrent ? 'Choose replacement plan' : 'Choose plan'}
+        subtitle={
+          changingCurrent
+            ? 'Existing payments stay attached to this membership.'
+            : 'Only active plans are available'
+        }>
         <View style={styles.planGrid}>
           {plans.map((plan) => (
             <Pressable
@@ -97,13 +134,34 @@ export default function NewMembershipScreen() {
             </Pressable>
           ))}
         </View>
-        <DateField label="Plan start date" value={joiningDate} onChange={setJoiningDate} />
-        <View style={styles.twoColumn}>
+        {!changingCurrent && (
+          <>
+            <DateField label="Plan start date" value={joiningDate} onChange={setJoiningDate} />
+            <View style={styles.twoColumn}>
           <FormField containerStyle={styles.half} label="Discount" icon="pricetag-outline" value={discount} onChangeText={setDiscount} keyboardType="numeric" placeholder="₹0" />
           <FormField containerStyle={styles.half} label="Admission fee" icon="add-circle-outline" value={admissionFee} onChangeText={setAdmissionFee} keyboardType="numeric" placeholder="₹0" />
-        </View>
+            </View>
+          </>
+        )}
       </Section>
 
+      {changingCurrent ? (
+        <Section title="Plan impact" subtitle="Discount, admission fee, and payments are kept as-is">
+          <View style={styles.totalBox}>
+            <View>
+              <Text style={styles.totalLabel}>New total</Text>
+              <Text style={styles.totalValue}>{formatCurrency(payableTotal)}</Text>
+            </View>
+            <View style={styles.totalRight}>
+              <Text style={styles.totalLabel}>Balance due</Text>
+              <Text style={[styles.totalValue, due > 0 && { color: palette.red }]}>{formatCurrency(due)}</Text>
+            </View>
+          </View>
+          <Text style={styles.impactNote}>
+            Paid amount remains {formatCurrency(member.paid_amount)}. New expiry date will be {formatDate(projectedEndDate)}.
+          </Text>
+        </Section>
+      ) : (
       <Section title="Opening payment" subtitle="Record any amount received with the new plan">
         <FormField label="Amount received" icon="cash-outline" value={initialPayment} onChangeText={setInitialPayment} keyboardType="numeric" placeholder="₹0" />
         <Text style={styles.groupLabel}>Payment method</Text>
@@ -115,7 +173,7 @@ export default function NewMembershipScreen() {
         <View style={styles.totalBox}>
           <View>
             <Text style={styles.totalLabel}>Final amount</Text>
-            <Text style={styles.totalValue}>{formatCurrency(total)}</Text>
+            <Text style={styles.totalValue}>{formatCurrency(payableTotal)}</Text>
           </View>
           <View style={styles.totalRight}>
             <Text style={styles.totalLabel}>Balance due</Text>
@@ -123,8 +181,14 @@ export default function NewMembershipScreen() {
           </View>
         </View>
       </Section>
+      )}
 
-      <PrimaryButton label="Assign membership plan" icon="refresh-circle" loading={saving} onPress={save} />
+      <PrimaryButton
+        label={changingCurrent ? 'Change current plan' : 'Assign membership plan'}
+        icon={changingCurrent ? 'swap-horizontal' : 'refresh-circle'}
+        loading={saving}
+        onPress={save}
+      />
     </Screen>
   );
 }
@@ -152,4 +216,5 @@ const styles = StyleSheet.create({
   totalRight: { alignItems: 'flex-end' },
   totalLabel: { color: palette.muted, fontSize: 11, fontWeight: '700' },
   totalValue: { color: palette.ink, fontSize: 19, fontWeight: '900', marginTop: 5 },
+  impactNote: { color: palette.muted, fontSize: 12, lineHeight: 18, marginTop: 13 },
 });
