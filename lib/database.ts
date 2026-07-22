@@ -201,10 +201,6 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase) {
       await db.execAsync('ALTER TABLE memberships ADD COLUMN cancelled_at TEXT;');
     }
     await db.execAsync(`
-      UPDATE memberships
-      SET cancelled_at = COALESCE(cancelled_at, date('now'))
-      WHERE status = 'cancelled';
-
       CREATE TRIGGER IF NOT EXISTS prevent_duplicate_member_phone_insert
       BEFORE INSERT ON members
       WHEN EXISTS (SELECT 1 FROM members WHERE phone = NEW.phone)

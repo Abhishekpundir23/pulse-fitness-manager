@@ -120,8 +120,8 @@ test('upgrades representative v2 data to v4 without altering records or backup s
     );
     assert.deepEqual(query(dbPath, "SELECT name FROM pragma_table_info('memberships') WHERE name = 'cancelled_at';"), [{ name: 'cancelled_at' }]);
     assert.deepEqual(
-      query(dbPath, "SELECT cancelled_at IS NOT NULL AS has_cancelled_at FROM memberships WHERE id = 21;"),
-      [{ has_cancelled_at: 1 }],
+      query(dbPath, "SELECT cancelled_at FROM memberships WHERE id = 21;"),
+      [{ cancelled_at: null }],
     );
     assert.deepEqual(
       query(dbPath, "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'prevent_duplicate_member_phone_%' ORDER BY name;"),
