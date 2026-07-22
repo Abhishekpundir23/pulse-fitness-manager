@@ -17,7 +17,16 @@ export function MemberCard({
   const historical = member.snapshot_date < todayIso();
   const cancelled = member.snapshot_status === 'cancelled';
   const expired = member.snapshot_status === 'expired';
-  const warning = member.snapshot_status === 'active' && member.end_date === member.snapshot_date;
+  const daysRemaining = member.end_date
+    ? Math.ceil((
+      new Date(`${member.end_date}T00:00:00`).getTime()
+      - new Date(`${member.snapshot_date}T00:00:00`).getTime()
+    ) / 86_400_000)
+    : null;
+  const warning = member.snapshot_status === 'active'
+    && daysRemaining !== null
+    && daysRemaining >= 0
+    && daysRemaining <= 7;
   const planLine = `${historical ? `As of ${formatDate(member.snapshot_date)} · ` : ''}${member.plan_name ?? 'No plan'}`;
   const statusCopy = cancelled
     ? 'Membership cancelled'

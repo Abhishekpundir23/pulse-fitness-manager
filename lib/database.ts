@@ -719,7 +719,10 @@ export async function getDashboardStats(db: SQLiteDatabase): Promise<DashboardSt
   const finance = await db.getFirstAsync<{ collected: number; due: number }>(
     `SELECT
       COALESCE((SELECT SUM(amount) FROM payments WHERE paid_at BETWEEN ? AND ?), 0) AS collected,
-      COALESCE((SELECT SUM(MAX(total_amount - paid_amount, 0)) FROM memberships WHERE status = 'active'), 0) AS due`,
+      COALESCE((SELECT SUM(CASE
+        WHEN status != 'cancelled' THEN MAX(total_amount - paid_amount, 0)
+        ELSE 0
+      END) FROM memberships), 0) AS due`,
     monthStart,
     today,
   );
@@ -792,7 +795,7 @@ export async function getReportData(db: SQLiteDatabase): Promise<ReportData> {
       COALESCE(SUM(CASE WHEN status = 'cancelled' THEN paid_amount ELSE total_amount END), 0) AS total_billed,
       COALESCE(SUM(paid_amount), 0) AS total_collected,
       COALESCE(SUM(CASE
-        WHEN status = 'active' THEN MAX(total_amount - paid_amount, 0)
+        WHEN status != 'cancelled' THEN MAX(total_amount - paid_amount, 0)
         ELSE 0
       END), 0) AS total_due
      FROM memberships`,
