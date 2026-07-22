@@ -38,11 +38,16 @@ const MEMBER_LIST_QUERY = `
     COALESCE(ms.total_amount, 0) AS total_amount,
     COALESCE(ms.paid_amount, 0) AS paid_amount,
     CASE
-      WHEN ms.status = 'active'
+      WHEN ms.id IS NOT NULL AND ms.status != 'cancelled'
       THEN MAX(COALESCE(ms.total_amount, 0) - COALESCE(ms.paid_amount, 0), 0)
       ELSE 0
     END AS due_amount,
-    CASE WHEN a.id IS NULL THEN 0 ELSE 1 END AS attended_today
+    CASE WHEN a.id IS NULL THEN 0 ELSE 1 END AS attended_today,
+    CASE WHEN ms.id IS NULL THEN 'none'
+      WHEN ms.status = 'cancelled' THEN 'cancelled'
+      WHEN ms.end_date < ? THEN 'expired'
+      ELSE 'active' END AS snapshot_status,
+    ? AS snapshot_date
   FROM members m
   LEFT JOIN memberships ms ON ms.id = (
     SELECT id FROM memberships
@@ -185,6 +190,37 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase) {
         ('last_backup_at', ''),
         ('last_backup_file', '');
       PRAGMA user_version = 3;
+    `);
+  }
+
+  if (currentVersion < 4) {
+    const cancelledAtColumn = await db.getFirstAsync<{ name: string }>(
+      "SELECT name FROM pragma_table_info('memberships') WHERE name = 'cancelled_at'",
+    );
+    if (!cancelledAtColumn) {
+      await db.execAsync('ALTER TABLE memberships ADD COLUMN cancelled_at TEXT;');
+    }
+    await db.execAsync(`
+      UPDATE memberships
+      SET cancelled_at = COALESCE(cancelled_at, date('now'))
+      WHERE status = 'cancelled';
+
+      CREATE TRIGGER IF NOT EXISTS prevent_duplicate_member_phone_insert
+      BEFORE INSERT ON members
+      WHEN EXISTS (SELECT 1 FROM members WHERE phone = NEW.phone)
+      BEGIN
+        SELECT RAISE(ABORT, 'A member with this phone number already exists.');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS prevent_duplicate_member_phone_update
+      BEFORE UPDATE OF phone ON members
+      WHEN NEW.phone != OLD.phone
+        AND EXISTS (SELECT 1 FROM members WHERE phone = NEW.phone AND id != OLD.id)
+      BEGIN
+        SELECT RAISE(ABORT, 'A member with this phone number already exists.');
+      END;
+
+      PRAGMA user_version = 4;
     `);
   }
 }
@@ -678,8 +714,9 @@ export async function cancelMembership(
 ) {
   const result = await db.runAsync(
     `UPDATE memberships
-     SET status = 'cancelled'
+     SET status = 'cancelled', cancelled_at = ?
      WHERE id = ? AND member_id = ? AND status = 'active'`,
+    todayIso(),
     membershipId,
     memberId,
   );
@@ -736,6 +773,8 @@ export async function getDashboardStats(db: SQLiteDatabase): Promise<DashboardSt
      ORDER BY m.created_at DESC
      LIMIT 4`,
     today,
+    today,
+    today,
   );
   const expiringMembers = await db.getAllAsync<MemberListItem>(
     `${MEMBER_LIST_QUERY}
@@ -743,6 +782,8 @@ export async function getDashboardStats(db: SQLiteDatabase): Promise<DashboardSt
        AND ms.end_date BETWEEN ? AND date(?, '+7 day')
      ORDER BY ms.end_date ASC
      LIMIT 5`,
+    today,
+    today,
     today,
     today,
     today,

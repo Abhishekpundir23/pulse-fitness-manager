@@ -56,6 +56,7 @@ export type MembershipBackupRow = BackupRow & {
   total_amount: number;
   paid_amount: number;
   status: string;
+  cancelled_at?: string | null;
   created_at: string;
 };
 
@@ -143,6 +144,7 @@ export const TABLE_COLUMNS: { [Table in BackupTable]: (keyof BackupData[Table][n
     'total_amount',
     'paid_amount',
     'status',
+    'cancelled_at',
     'created_at',
   ],
   payments: [
@@ -246,6 +248,11 @@ function validateRows(table: BackupTable, rows: unknown[]): asserts rows is Back
       if (!Number.isSafeInteger(value.plan_id)) {
         invalidField(table, rowIndex, 'plan_id', 'a safe integer');
       }
+      if (value.cancelled_at !== undefined
+        && value.cancelled_at !== null
+        && typeof value.cancelled_at !== 'string') {
+        invalidField(table, rowIndex, 'cancelled_at', 'a string, null, or omitted');
+      }
     }
     if (table === 'payments') {
       if (!Number.isSafeInteger(value.member_id)) {
@@ -280,6 +287,7 @@ function validateRelationships(data: BackupData) {
   const planIds = uniqueValues('plans', data.plans, 'id');
   const memberIds = uniqueValues('members', data.members, 'id');
   uniqueValues('members', data.members, 'membership_id');
+  uniqueValues('members', data.members, 'phone');
   const membershipIds = uniqueValues('memberships', data.memberships, 'id');
   uniqueValues('payments', data.payments, 'id');
   uniqueValues('attendance', data.attendance, 'id');

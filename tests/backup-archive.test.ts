@@ -105,6 +105,22 @@ test('rejects duplicate primary IDs', () => {
   assert.throws(() => validateBackupArchive(broken), /duplicate id/);
 });
 
+test('rejects duplicate member phone numbers', () => {
+  const broken = structuredClone(validArchive);
+  broken.data.members.push({
+    ...broken.data.members[0],
+    id: 11,
+    membership_id: 'PF-0011',
+  });
+  assert.throws(() => validateBackupArchive(broken), /duplicate phone/);
+});
+
+test('accepts legacy memberships without a cancellation timestamp', () => {
+  const legacy = structuredClone(validArchive);
+  delete legacy.data.memberships[0].cancelled_at;
+  assert.doesNotThrow(() => validateBackupArchive(legacy));
+});
+
 test('rejects memberships with unknown plans', () => {
   const broken = structuredClone(validArchive);
   broken.data.memberships[0].plan_id = 999;

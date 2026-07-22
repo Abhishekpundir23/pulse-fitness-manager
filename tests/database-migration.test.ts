@@ -8,7 +8,11 @@ import test from 'node:test';
 import { migrateDbIfNeeded } from '../lib/database.ts';
 
 function execute(dbPath: string, sql: string) {
-  return execFileSync('sqlite3', ['-bail', dbPath], { encoding: 'utf8', input: sql });
+  return execFileSync('sqlite3', ['-bail', dbPath], {
+    encoding: 'utf8',
+    input: sql,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
 }
 
 function query<T>(dbPath: string, sql: string): T[] {
@@ -27,7 +31,7 @@ function sqliteAdapter(dbPath: string) {
   };
 }
 
-test('upgrades representative v2 data to v3 without altering records or backup status', async () => {
+test('upgrades representative v2 data to v4 without altering records or backup status', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'pulse-migration-'));
   const dbPath = join(directory, 'pulse.db');
 
@@ -47,7 +51,8 @@ test('upgrades representative v2 data to v3 without altering records or backup s
         plan_id INTEGER NOT NULL,
         start_date TEXT NOT NULL,
         end_date TEXT NOT NULL,
-        total_amount REAL NOT NULL
+        total_amount REAL NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active'
       );
       CREATE TABLE payments (
         id INTEGER PRIMARY KEY,
@@ -64,8 +69,10 @@ test('upgrades representative v2 data to v3 without altering records or backup s
         ('gym_name', 'Pulse Fitness');
       INSERT INTO plans(id, name) VALUES (1, 'Monthly');
       INSERT INTO members(id, membership_id, name, phone) VALUES (10, 'PF-0010', 'Asha', '9999999999');
-      INSERT INTO memberships(id, member_id, plan_id, start_date, end_date, total_amount)
-      VALUES (20, 10, 1, '2026-07-01', '2026-08-01', 600);
+      INSERT INTO memberships(id, member_id, plan_id, start_date, end_date, total_amount, status)
+      VALUES
+        (20, 10, 1, '2026-07-01', '2026-08-01', 600, 'active'),
+        (21, 10, 1, '2026-05-01', '2026-05-31', 600, 'cancelled');
       INSERT INTO payments(id, member_id, membership_id, amount, method, paid_at)
       VALUES (30, 10, 20, 600, 'cash', '2026-07-01');
       PRAGMA user_version = 2;
@@ -73,7 +80,7 @@ test('upgrades representative v2 data to v3 without altering records or backup s
 
     const recordsBefore = {
       members: query(dbPath, 'SELECT * FROM members ORDER BY id;'),
-      memberships: query(dbPath, 'SELECT * FROM memberships ORDER BY id;'),
+      memberships: query(dbPath, 'SELECT id, member_id, plan_id, start_date, end_date, total_amount, status FROM memberships ORDER BY id;'),
       payments: query(dbPath, 'SELECT * FROM payments ORDER BY id;'),
     };
     const db = sqliteAdapter(dbPath);
@@ -94,7 +101,7 @@ test('upgrades representative v2 data to v3 without altering records or backup s
 
     assert.deepEqual({
       members: query(dbPath, 'SELECT * FROM members ORDER BY id;'),
-      memberships: query(dbPath, 'SELECT * FROM memberships ORDER BY id;'),
+      memberships: query(dbPath, 'SELECT id, member_id, plan_id, start_date, end_date, total_amount, status FROM memberships ORDER BY id;'),
       payments: query(dbPath, 'SELECT * FROM payments ORDER BY id;'),
     }, recordsBefore);
     assert.deepEqual(
@@ -111,7 +118,20 @@ test('upgrades representative v2 data to v3 without altering records or backup s
         { name: 'idx_payments_method_date' },
       ],
     );
-    assert.deepEqual(query(dbPath, 'PRAGMA user_version;'), [{ user_version: 3 }]);
+    assert.deepEqual(query(dbPath, "SELECT name FROM pragma_table_info('memberships') WHERE name = 'cancelled_at';"), [{ name: 'cancelled_at' }]);
+    assert.deepEqual(
+      query(dbPath, "SELECT cancelled_at IS NOT NULL AS has_cancelled_at FROM memberships WHERE id = 21;"),
+      [{ has_cancelled_at: 1 }],
+    );
+    assert.deepEqual(
+      query(dbPath, "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'prevent_duplicate_member_phone_%' ORDER BY name;"),
+      [
+        { name: 'prevent_duplicate_member_phone_insert' },
+        { name: 'prevent_duplicate_member_phone_update' },
+      ],
+    );
+    assert.throws(() => execute(dbPath, "INSERT INTO members(id, membership_id, name, phone) VALUES (11, 'PF-0011', 'Other', '9999999999');"), /member with this phone number/);
+    assert.deepEqual(query(dbPath, 'PRAGMA user_version;'), [{ user_version: 4 }]);
   } finally {
     rmSync(directory, { force: true, recursive: true });
   }
