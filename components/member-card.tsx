@@ -18,9 +18,9 @@ export function MemberCard({
   const cancelled = member.snapshot_status === 'cancelled';
   const expired = member.snapshot_status === 'expired';
   const daysRemaining = member.end_date
-    ? Math.ceil((
-      new Date(`${member.end_date}T00:00:00`).getTime()
-      - new Date(`${member.snapshot_date}T00:00:00`).getTime()
+    ? Math.round((
+      new Date(`${member.end_date}T00:00:00Z`).getTime()
+      - new Date(`${member.snapshot_date}T00:00:00Z`).getTime()
     ) / 86_400_000)
     : null;
   const warning = member.snapshot_status === 'active'
