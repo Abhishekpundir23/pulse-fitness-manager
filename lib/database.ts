@@ -2,6 +2,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 
 import { addMonths, todayIso } from '@/lib/format';
 import { buildMemberSnapshotQuery } from '@/lib/member-query';
+import { CREATE_MEMBER_PHONE_GUARDS_SQL } from '@/lib/member-phone-guards';
 import { buildPaymentHistoryQuery } from '@/lib/payment-query';
 import type {
   CreateMembershipInput,
@@ -200,24 +201,8 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase) {
     if (!cancelledAtColumn) {
       await db.execAsync('ALTER TABLE memberships ADD COLUMN cancelled_at TEXT;');
     }
-    await db.execAsync(`
-      CREATE TRIGGER IF NOT EXISTS prevent_duplicate_member_phone_insert
-      BEFORE INSERT ON members
-      WHEN EXISTS (SELECT 1 FROM members WHERE phone = NEW.phone)
-      BEGIN
-        SELECT RAISE(ABORT, 'A member with this phone number already exists.');
-      END;
-
-      CREATE TRIGGER IF NOT EXISTS prevent_duplicate_member_phone_update
-      BEFORE UPDATE OF phone ON members
-      WHEN NEW.phone != OLD.phone
-        AND EXISTS (SELECT 1 FROM members WHERE phone = NEW.phone AND id != OLD.id)
-      BEGIN
-        SELECT RAISE(ABORT, 'A member with this phone number already exists.');
-      END;
-
-      PRAGMA user_version = 4;
-    `);
+    await db.execAsync(CREATE_MEMBER_PHONE_GUARDS_SQL);
+    await db.execAsync('PRAGMA user_version = 4;');
   }
 }
 
@@ -971,6 +956,31 @@ export type BackupStatus = {
   exportedAt: string;
   filename: string;
 };
+
+export type BackupDataHealth = {
+  duplicatePhoneGroups: number;
+  duplicatePhoneMembers: number;
+};
+
+export async function getBackupDataHealth(db: SQLiteDatabase): Promise<BackupDataHealth> {
+  const duplicatePhones = await db.getFirstAsync<{
+    duplicate_phone_groups: number;
+    duplicate_phone_members: number | null;
+  }>(`
+    SELECT COUNT(*) AS duplicate_phone_groups,
+      COALESCE(SUM(member_count), 0) AS duplicate_phone_members
+    FROM (
+      SELECT COUNT(*) AS member_count
+      FROM members
+      GROUP BY phone
+      HAVING COUNT(*) > 1
+    )
+  `);
+  return {
+    duplicatePhoneGroups: duplicatePhones?.duplicate_phone_groups ?? 0,
+    duplicatePhoneMembers: duplicatePhones?.duplicate_phone_members ?? 0,
+  };
+}
 
 export async function getBackupStatus(db: SQLiteDatabase): Promise<BackupStatus> {
   const rows = await db.getAllAsync<{ key: string; value: string }>(

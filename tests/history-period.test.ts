@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   currentMonthKey,
   formatMonthLabel,
+  isFutureMonthKey,
   monthRange,
   shiftMonth,
   snapshotDateForMonth,
@@ -19,8 +20,15 @@ test('uses the final calendar day for a past-month snapshot', () => {
   assert.equal(snapshotDateForMonth('2024-02', '2026-07-21'), '2024-02-29');
 });
 
-test('never creates a future snapshot', () => {
-  assert.equal(snapshotDateForMonth('2026-08', '2026-07-21'), '2026-07-21');
+test('uses the month end for an explicitly selected future snapshot', () => {
+  assert.equal(snapshotDateForMonth('2026-08', '2026-07-21'), '2026-08-31');
+  assert.equal(snapshotDateForMonth('2027-02', '2026-07-21'), '2027-02-28');
+});
+
+test('identifies future months without treating the current month as future', () => {
+  assert.equal(isFutureMonthKey('2026-07', '2026-07-31'), false);
+  assert.equal(isFutureMonthKey('2026-08', '2026-07-31'), true);
+  assert.equal(isFutureMonthKey('2026-06', '2026-07-31'), false);
 });
 
 test('moves across year boundaries and returns an inclusive month range', () => {

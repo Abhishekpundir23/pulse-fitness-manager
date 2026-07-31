@@ -5,6 +5,10 @@ import {
   type BackupTable,
   type MemberBackupRow,
 } from '@/lib/backup-archive';
+import {
+  CREATE_MEMBER_PHONE_GUARDS_SQL,
+  DROP_MEMBER_PHONE_GUARDS_SQL,
+} from '@/lib/member-phone-guards';
 
 type RestoreValue = string | number | null;
 
@@ -49,6 +53,9 @@ export async function replaceDatabaseRows(
 
   await transaction.execAsync('BEGIN IMMEDIATE;');
   try {
+    // Older installations may already contain duplicate phone values. Temporarily
+    // remove the write guards so a verified backup can restore those rows exactly.
+    await transaction.execAsync(DROP_MEMBER_PHONE_GUARDS_SQL);
     await transaction.execAsync(`
       DELETE FROM attendance;
       DELETE FROM payments;
@@ -66,6 +73,7 @@ export async function replaceDatabaseRows(
     await insertRows(transaction, 'memberships', archive.data.memberships);
     await insertRows(transaction, 'payments', archive.data.payments);
     await insertRows(transaction, 'attendance', archive.data.attendance);
+    await transaction.execAsync(CREATE_MEMBER_PHONE_GUARDS_SQL);
     await transaction.execAsync('COMMIT;');
   } catch (error) {
     try {

@@ -1,3 +1,5 @@
+import { todayIso } from './format.ts';
+
 function parseMonthKey(monthKey: string) {
   const match = /^(\d{4})-(\d{2})$/.exec(monthKey);
   if (!match) throw new Error('Invalid month value.');
@@ -7,7 +9,7 @@ function parseMonthKey(monthKey: string) {
   return { year, month };
 }
 
-export function currentMonthKey(today = new Date().toISOString().slice(0, 10)) {
+export function currentMonthKey(today = todayIso()) {
   return today.slice(0, 7);
 }
 
@@ -23,9 +25,14 @@ export function monthRange(monthKey: string) {
   return { start: `${monthKey}-01`, end: `${monthKey}-${String(lastDay).padStart(2, '0')}` };
 }
 
-export function snapshotDateForMonth(monthKey: string, today = new Date().toISOString().slice(0, 10)) {
+export function snapshotDateForMonth(monthKey: string, today = todayIso()) {
   const end = monthRange(monthKey).end;
-  return end > today ? today : end;
+  return monthKey === currentMonthKey(today) ? today : end;
+}
+
+export function isFutureMonthKey(monthKey: string, today = todayIso()) {
+  parseMonthKey(monthKey);
+  return monthKey > currentMonthKey(today);
 }
 
 export function formatMonthLabel(monthKey: string) {

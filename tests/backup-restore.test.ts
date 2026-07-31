@@ -121,12 +121,35 @@ test('enables and verifies foreign keys before beginning or mutating', async () 
     'get:foreign_keys',
     'exec:BEGIN IMMEDIATE;',
   ]);
-  assert.match(events[3], /^exec:DELETE FROM attendance;/);
+  const dropGuards = events.findIndex((event) => event.includes('DROP TRIGGER IF EXISTS prevent_duplicate_member_phone_insert'));
+  const firstMemberInsert = events.findIndex((event) => event.startsWith('run:INSERT INTO members'));
+  const createGuards = events.findIndex((event) => event.includes('CREATE TRIGGER IF NOT EXISTS prevent_duplicate_member_phone_insert'));
+  assert.ok(dropGuards >= 3);
+  assert.ok(firstMemberInsert > dropGuards);
+  assert.ok(createGuards > firstMemberInsert);
   assert.deepEqual(
     runs.map(({ sql }) => sql.match(/^INSERT INTO (\w+)/)?.[1]),
     ['settings', 'plans', 'members', 'expenses', 'memberships', 'payments', 'attendance'],
   );
   assert.equal(runs[2].values[9], null);
+  assert.equal(events.at(-1), 'exec:COMMIT;');
+});
+
+test('restores legacy members with duplicate phones while reinstating duplicate guards', async () => {
+  const legacy = structuredClone(archive);
+  legacy.data.members.push({
+    ...legacy.data.members[0],
+    id: 11,
+    membership_id: 'PF-0011',
+  });
+  const { events, handle, runs } = fakeTransaction();
+
+  await replaceDatabaseRows(handle, legacy);
+
+  const memberRows = runs.filter(({ sql }) => /^INSERT INTO members /.test(sql));
+  assert.equal(memberRows.length, 2);
+  assert.equal(memberRows[0].values[4], memberRows[1].values[4]);
+  assert.ok(events.some((event) => event.includes('CREATE TRIGGER IF NOT EXISTS prevent_duplicate_member_phone_update')));
   assert.equal(events.at(-1), 'exec:COMMIT;');
 });
 

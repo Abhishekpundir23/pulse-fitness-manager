@@ -1,7 +1,7 @@
 {
   "name": "gym-manager",
   "main": "expo-router/entry",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
@@ -10,7 +10,9 @@
     "web": "expo start --web",
     "preview:web": "node scripts/serve-preview.mjs",
     "lint": "expo lint",
-    "test": "node --import tsx --test tests/**/*.test.ts"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/**/*.test.ts",
+    "check": "npm run lint && npm run typecheck && npm test"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

@@ -21,10 +21,7 @@ export const palette = {
 
 export const shadows = {
   card: {
-    shadowColor: palette.ink,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.08,
-    shadowRadius: 16,
+    boxShadow: '0 6px 16px rgba(11, 19, 32, 0.08)',
     elevation: 3,
   },
 };
@@ -36,4 +33,3 @@ export const radii = {
   xl: 30,
   pill: 999,
 };
-

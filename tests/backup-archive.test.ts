@@ -105,14 +105,14 @@ test('rejects duplicate primary IDs', () => {
   assert.throws(() => validateBackupArchive(broken), /duplicate id/);
 });
 
-test('rejects duplicate member phone numbers', () => {
-  const broken = structuredClone(validArchive);
-  broken.data.members.push({
-    ...broken.data.members[0],
+test('preserves legacy members that share a phone number', () => {
+  const legacy = structuredClone(validArchive);
+  legacy.data.members.push({
+    ...legacy.data.members[0],
     id: 11,
     membership_id: 'PF-0011',
   });
-  assert.throws(() => validateBackupArchive(broken), /duplicate phone/);
+  assert.doesNotThrow(() => validateBackupArchive(legacy));
 });
 
 test('accepts legacy memberships without a cancellation timestamp', () => {

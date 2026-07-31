@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { currentMonthKey, formatMonthLabel, shiftMonth } from '@/lib/history-period';
+import { currentMonthKey, formatMonthLabel, isFutureMonthKey, shiftMonth } from '@/lib/history-period';
 import { palette, radii } from '@/lib/theme';
 
 type Props = {
@@ -13,7 +13,7 @@ type Props = {
 export function MonthFilter({ value, onChange, allowAllTime = false }: Props) {
   const currentMonth = currentMonthKey();
   const selectedMonth = value ?? currentMonth;
-  const isCurrentMonth = selectedMonth === currentMonth;
+  const isFutureMonth = value !== null && isFutureMonthKey(value);
 
   return (
     <View style={styles.wrap}>
@@ -25,13 +25,15 @@ export function MonthFilter({ value, onChange, allowAllTime = false }: Props) {
           style={({ pressed }) => [styles.arrow, pressed && styles.pressed]}>
           <Ionicons name="chevron-back" size={19} color={palette.ink} />
         </Pressable>
-        <Text style={styles.label}>{value ? formatMonthLabel(value) : 'All time'}</Text>
+        <View style={styles.labelWrap}>
+          <Text style={styles.label}>{value ? formatMonthLabel(value) : 'All time'}</Text>
+          {isFutureMonth && <Text style={styles.futureLabel}>Upcoming</Text>}
+        </View>
         <Pressable
           accessibilityLabel="Next month"
           accessibilityRole="button"
-          disabled={isCurrentMonth}
           onPress={() => onChange(shiftMonth(selectedMonth, 1))}
-          style={({ pressed }) => [styles.arrow, isCurrentMonth && styles.disabled, pressed && styles.pressed]}>
+          style={({ pressed }) => [styles.arrow, pressed && styles.pressed]}>
           <Ionicons name="chevron-forward" size={19} color={palette.ink} />
         </Pressable>
       </View>
@@ -66,13 +68,14 @@ const styles = StyleSheet.create({
     backgroundColor: palette.card,
   },
   arrow: { width: 42, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' },
-  label: { flex: 1, color: palette.ink, fontSize: 14, fontWeight: '800', textAlign: 'center' },
+  labelWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 4 },
+  label: { color: palette.ink, fontSize: 14, fontWeight: '800', textAlign: 'center' },
+  futureLabel: { color: palette.blue, fontSize: 9, fontWeight: '900', letterSpacing: 0.7, marginTop: 1, textTransform: 'uppercase' },
   action: { minHeight: 42, justifyContent: 'center', paddingHorizontal: 13, borderRadius: radii.md },
   actionText: { color: palette.emeraldDark, fontSize: 13, fontWeight: '800' },
   allTime: { minHeight: 36, justifyContent: 'center', paddingHorizontal: 12, borderRadius: radii.pill, backgroundColor: palette.card },
   allTimeSelected: { backgroundColor: palette.emeraldDark },
   allTimeText: { color: palette.inkSoft, fontSize: 12, fontWeight: '800' },
   allTimeTextSelected: { color: palette.white },
-  disabled: { opacity: 0.35 },
   pressed: { opacity: 0.7 },
 });

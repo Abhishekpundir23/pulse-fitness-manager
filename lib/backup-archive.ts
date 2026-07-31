@@ -287,7 +287,6 @@ function validateRelationships(data: BackupData) {
   const planIds = uniqueValues('plans', data.plans, 'id');
   const memberIds = uniqueValues('members', data.members, 'id');
   uniqueValues('members', data.members, 'membership_id');
-  uniqueValues('members', data.members, 'phone');
   const membershipIds = uniqueValues('memberships', data.memberships, 'id');
   uniqueValues('payments', data.payments, 'id');
   uniqueValues('attendance', data.attendance, 'id');

@@ -16,12 +16,14 @@ import {
 import {
   createPlan,
   getAllPlans,
+  getBackupDataHealth,
   getBackupStatus,
   getGymProfile,
   saveBackupStatus,
   saveGymProfile,
   setPlanActive,
   updatePlan,
+  type BackupDataHealth,
   type BackupStatus,
 } from '@/lib/database';
 import { formatCurrency } from '@/lib/format';
@@ -29,6 +31,7 @@ import { palette, radii } from '@/lib/theme';
 import type { GymProfile, Plan } from '@/lib/types';
 
 const EMPTY_PROFILE: GymProfile = { gymName: '', ownerName: '', phone: '', email: '', address: '' };
+const CLEAN_BACKUP_DATA: BackupDataHealth = { duplicatePhoneGroups: 0, duplicatePhoneMembers: 0 };
 
 export default function SettingsScreen() {
   const db = useSQLiteContext();
@@ -36,6 +39,7 @@ export default function SettingsScreen() {
   const [profile, setProfile] = useState<GymProfile | null>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [backupStatus, setBackupStatus] = useState<BackupStatus>({ exportedAt: '', filename: '' });
+  const [backupDataHealth, setBackupDataHealth] = useState<BackupDataHealth>(CLEAN_BACKUP_DATA);
   const [saving, setSaving] = useState(false);
   const [backupBusy, setBackupBusy] = useState(false);
   const [planEditorOpen, setPlanEditorOpen] = useState(false);
@@ -46,14 +50,16 @@ export default function SettingsScreen() {
   const [planSaving, setPlanSaving] = useState(false);
 
   const load = useCallback(async () => {
-    const [nextProfile, nextPlans, nextBackupStatus] = await Promise.all([
+    const [nextProfile, nextPlans, nextBackupStatus, nextBackupDataHealth] = await Promise.all([
       getGymProfile(db),
       getAllPlans(db),
       getBackupStatus(db),
+      getBackupDataHealth(db),
     ]);
     setProfile(nextProfile);
     setPlans(nextPlans);
     setBackupStatus(nextBackupStatus);
+    setBackupDataHealth(nextBackupDataHealth);
   }, [db]);
 
   useFocusEffect(useCallback(() => {
@@ -197,9 +203,12 @@ export default function SettingsScreen() {
     setBackupBusy(true);
     try {
       const prepared = await prepareBackup(db);
+      const legacyPhoneNote = backupDataHealth.duplicatePhoneGroups > 0
+        ? `\n\nAll ${backupDataHealth.duplicatePhoneMembers} profiles with shared legacy phone numbers are included safely.`
+        : '';
       Alert.alert(
         'Backup ready',
-        'Save to a folder for a verified local copy, or open the share sheet to send the file to another app.',
+        `Save to a folder for a verified local copy, or open the share sheet to send the file to another app.${legacyPhoneNote}`,
         [
           {
             text: 'Cancel',
@@ -304,6 +313,17 @@ export default function SettingsScreen() {
           <Ionicons name="shield-checkmark" size={24} color={palette.emeraldDark} />
           <Text style={styles.backupNoticeText}>Backups include members, plans, payments, attendance, expenses, and gym profile data.</Text>
         </View>
+        {backupDataHealth.duplicatePhoneGroups > 0 && (
+          <View style={styles.backupHealthNotice}>
+            <Ionicons name="information-circle" size={22} color={palette.amber} />
+            <View style={styles.backupHealthCopy}>
+              <Text style={styles.backupHealthTitle}>Legacy shared phone numbers</Text>
+              <Text style={styles.backupHealthText}>
+                {backupDataHealth.duplicatePhoneMembers} profiles share {backupDataHealth.duplicatePhoneGroups} phone {backupDataHealth.duplicatePhoneGroups === 1 ? 'number' : 'numbers'}. Backups preserve every profile; new duplicates remain blocked.
+              </Text>
+            </View>
+          </View>
+        )}
         {backupStatus.exportedAt ? (
           <View style={styles.backupStatus}>
             <Text style={styles.backupStatusTitle}>Last successful backup: {formatBackupDate(backupStatus.exportedAt)}</Text>
@@ -384,6 +404,10 @@ const styles = StyleSheet.create({
   reactivateButton: { backgroundColor: palette.blueSoft },
   backupNotice: { flexDirection: 'row', gap: 11, padding: 14, borderRadius: radii.md, backgroundColor: palette.emeraldSoft, marginBottom: 8 },
   backupNoticeText: { flex: 1, color: palette.emeraldDark, fontSize: 12, lineHeight: 18, fontWeight: '600' },
+  backupHealthNotice: { flexDirection: 'row', gap: 10, padding: 13, borderRadius: radii.md, backgroundColor: palette.amberSoft, marginBottom: 8 },
+  backupHealthCopy: { flex: 1 },
+  backupHealthTitle: { color: palette.ink, fontSize: 12, fontWeight: '800' },
+  backupHealthText: { color: palette.inkSoft, fontSize: 11, lineHeight: 17, marginTop: 3 },
   backupStatus: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: palette.line },
   backupStatusTitle: { color: palette.ink, fontSize: 12, fontWeight: '800' },
   backupStatusFile: { color: palette.muted, fontSize: 11, lineHeight: 16, marginTop: 3 },
