@@ -99,6 +99,17 @@ test('accepts version 1 backups created by the current app', () => {
   assert.doesNotThrow(() => validateBackupArchive(validArchive));
 });
 
+test('writes archive version 2 so older apps cannot silently turn voided payments back into receipts', () => {
+  const serialized = serializeBackup(validArchive);
+  assert.equal(JSON.parse(serialized).schemaVersion, 2);
+  assert.equal(parseBackupArchive(serialized).schemaVersion, 2);
+});
+
+test('accepts current version 2 archives and refuses unsupported future versions', () => {
+  assert.doesNotThrow(() => validateBackupArchive({ ...validArchive, schemaVersion: 2 }));
+  assert.throws(() => validateBackupArchive({ ...validArchive, schemaVersion: 3 }), /not compatible/);
+});
+
 test('rejects duplicate primary IDs', () => {
   const broken = structuredClone(validArchive);
   broken.data.plans.push({ ...broken.data.plans[0] });
@@ -187,4 +198,57 @@ test('rejects unsafe primary and foreign key integers', () => {
 
 test('rejects invalid JSON', () => {
   assert.throws(() => parseBackupArchive('{not-json'), /valid JSON/);
+});
+
+test('normalizes legacy optional history fields without mutating the source archive', () => {
+  const parsed = validateBackupArchive(validArchive);
+  assert.equal(parsed.data.memberships[0].plan_name, '1 Month');
+  assert.equal(parsed.data.payments[0].voided_at, null);
+  assert.equal(parsed.data.payments[0].void_reason, null);
+  assert.equal('plan_name' in validArchive.data.memberships[0], false);
+});
+
+test('preserves plan snapshots and excludes voided payments from the verified paid total', () => {
+  const data = structuredClone(validArchive);
+  data.data.memberships[0].plan_name = 'Original monthly plan';
+  data.data.payments.push({ ...data.data.payments[0], id: 31, amount: 200,
+    voided_at: '2026-09-22 12:30:00', void_reason: 'Duplicate entry' });
+  const restored = parseBackupArchive(serializeBackup(data));
+  assert.equal(restored.data.memberships[0].plan_name, 'Original monthly plan');
+  assert.equal(restored.data.payments[1].void_reason, 'Duplicate entry');
+  assert.equal(restored.data.memberships[0].paid_amount, 300);
+});
+
+test('rejects inconsistent totals and negative money before replacement', () => {
+  const mismatch = structuredClone(validArchive);
+  mismatch.data.memberships[0].paid_amount = 301;
+  assert.throws(() => validateBackupArchive(mismatch), /paid.*total|payment.*total/i);
+  const overpaid = structuredClone(validArchive);
+  overpaid.data.memberships[0].total_amount = 250;
+  assert.throws(() => validateBackupArchive(overpaid), /exceed/i);
+  const negative = structuredClone(validArchive);
+  negative.data.expenses[0].amount = -1;
+  assert.throws(() => validateBackupArchive(negative), /non-negative/);
+});
+
+test('rejects incomplete or invalid void metadata', () => {
+  for (const fields of [
+    { voided_at: '2026-09-22T12:00:00.000Z', void_reason: null },
+    { voided_at: null, void_reason: 'Incorrect entry' },
+    { voided_at: 'not-a-date', void_reason: 'Incorrect entry' },
+    { voided_at: '2026-09-22T12:00:00.000Z', void_reason: '   ' },
+  ]) {
+    const broken = structuredClone(validArchive);
+    Object.assign(broken.data.payments[0], fields);
+    assert.throws(() => validateBackupArchive(broken), /void/i);
+  }
+});
+
+test('rejects invalid archive dates and malformed base64 photo data', () => {
+  const broken = structuredClone(validArchive);
+  broken.exportedAt = 'not-a-date';
+  assert.throws(() => validateBackupArchive(broken), /exportedAt/);
+  broken.exportedAt = validArchive.exportedAt;
+  broken.memberPhotos!['10'].data = '%%%';
+  assert.throws(() => validateBackupArchive(broken), /photo data/);
 });

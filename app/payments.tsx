@@ -22,9 +22,15 @@ export default function PaymentHistoryScreen() {
   const [month, setMonth] = useState<string | null>(null);
   const [method, setMethod] = useState<PaymentHistoryMethod>('all');
   const [history, setHistory] = useState<PaymentHistoryResult | null>(null);
+  const [loadError, setLoadError] = useState('');
 
   const load = useCallback(async () => {
-    setHistory(await getPaymentHistory(db, { search, month, method }));
+    try {
+      setHistory(await getPaymentHistory(db, { search, month, method, includeVoided: true }));
+      setLoadError('');
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : 'Please try again.');
+    }
   }, [db, method, month, search]);
 
   useFocusEffect(useCallback(() => {
@@ -37,7 +43,9 @@ export default function PaymentHistoryScreen() {
     return () => clearTimeout(timer);
   }, [load]);
 
-  const emptyState = history === null ? (
+  const emptyState = loadError ? (
+    <View style={styles.emptyWrap}><EmptyState icon="alert-circle-outline" title="Could not load payments" message={loadError} /></View>
+  ) : history === null ? (
     <View style={styles.emptyWrap}><LoadingView /></View>
   ) : (
     <View style={styles.emptyWrap}>
@@ -62,14 +70,16 @@ export default function PaymentHistoryScreen() {
             accessibilityLabel={`Open ${item.member_name}`}
             onPress={() => router.push(`/member/${item.member_id}`)}
             style={({ pressed }) => [styles.paymentRow, pressed && styles.pressed]}>
-            <View style={styles.paymentIcon}>
-              <Ionicons name="arrow-down" size={17} color={palette.emeraldDark} />
+            <View style={[styles.paymentIcon, item.voided_at ? styles.voidIcon : null]}>
+              <Ionicons name={item.voided_at ? 'return-up-back' : 'arrow-down'} size={17} color={item.voided_at ? palette.red : palette.emeraldDark} />
             </View>
             <View style={styles.paymentCopy}>
               <Text style={styles.paymentName}>{item.member_name}</Text>
               <Text style={styles.paymentMeta}>{item.member_code} · {item.method} · {formatDate(item.paid_at)}</Text>
+              <Text style={styles.paymentMeta}>Receipt #{item.id} · Period #{item.membership_id}</Text>
+              {!!item.voided_at && <Text style={styles.voidLabel}>Reversed {formatDate(item.voided_at.slice(0, 10))} · {item.void_reason}</Text>}
             </View>
-            <Text style={styles.paymentAmount}>{formatCurrency(item.amount)}</Text>
+            <Text style={[styles.paymentAmount, item.voided_at ? styles.voidAmount : null]}>{formatCurrency(item.amount)}</Text>
           </Pressable>
         )}
         ListHeaderComponent={(
@@ -77,7 +87,7 @@ export default function PaymentHistoryScreen() {
             <TopBar
               eyebrow="Collections"
               title="Payment history"
-              subtitle={history ? `${history.count} payment${history.count === 1 ? '' : 's'} found` : 'Loading payments'}
+              subtitle={history ? `${history.count} recorded entr${history.count === 1 ? 'y' : 'ies'}, including reversals` : 'Loading payments'}
             />
             <SearchBox value={search} onChangeText={setSearch} placeholder="Name, phone or member ID" />
             <MonthFilter value={month} onChange={setMonth} allowAllTime />
@@ -93,8 +103,8 @@ export default function PaymentHistoryScreen() {
             </View>
             <View style={styles.summaryCard}>
               <View>
-                <Text style={styles.summaryLabel}>Filtered collection</Text>
-                <Text style={styles.summaryCount}>{history?.count ?? 0} payment{history?.count === 1 ? '' : 's'}</Text>
+                <Text style={styles.summaryLabel}>Filtered collection · reversals excluded</Text>
+                <Text style={styles.summaryCount}>{history?.items.filter((payment) => !payment.voided_at).length ?? 0} valid payments</Text>
               </View>
               <Text style={styles.summaryTotal}>{formatCurrency(history?.total ?? 0)}</Text>
             </View>
@@ -129,4 +139,7 @@ const styles = StyleSheet.create({
   paymentAmount: { color: palette.emeraldDark, fontSize: 14, fontWeight: '900' },
   emptyWrap: { flex: 1, minHeight: 220, justifyContent: 'center' },
   pressed: { opacity: 0.75 },
+  voidIcon: { backgroundColor: palette.redSoft },
+  voidLabel: { color: palette.red, fontSize: 11, marginTop: 5, fontWeight: '700' },
+  voidAmount: { color: palette.muted, textDecorationLine: 'line-through' },
 });

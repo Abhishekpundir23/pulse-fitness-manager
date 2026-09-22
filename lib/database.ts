@@ -3,6 +3,8 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 import { addMonths, todayIso } from '@/lib/format';
 import { buildMemberSnapshotQuery } from '@/lib/member-query';
 import { CREATE_MEMBER_PHONE_GUARDS_SQL } from '@/lib/member-phone-guards';
+import { normalizeMemberPhone } from '@/lib/member-phone';
+export { normalizeMemberPhone } from '@/lib/member-phone';
 import { buildPaymentHistoryQuery } from '@/lib/payment-query';
 import type {
   CreateMembershipInput,
@@ -13,6 +15,8 @@ import type {
   MemberDetail,
   MemberFilter,
   MemberListItem,
+  Membership,
+  Payment,
   PaymentMethod,
   PaymentHistoryFilters,
   PaymentHistoryItem,
@@ -33,19 +37,18 @@ const MEMBER_LIST_QUERY = `
     m.status,
     m.joined_at,
     ms.plan_id,
-    p.name AS plan_name,
+    COALESCE(ms.plan_name, p.name) AS plan_name,
     ms.status AS membership_status,
     ms.end_date,
     COALESCE(ms.total_amount, 0) AS total_amount,
     COALESCE(ms.paid_amount, 0) AS paid_amount,
-    CASE
-      WHEN ms.id IS NOT NULL AND ms.status != 'cancelled'
-      THEN MAX(COALESCE(ms.total_amount, 0) - COALESCE(ms.paid_amount, 0), 0)
-      ELSE 0
-    END AS due_amount,
+    COALESCE((SELECT ROUND(SUM(MAX(ROUND(owed.total_amount - owed.paid_amount, 2), 0)), 2)
+      FROM memberships owed WHERE owed.member_id = m.id AND owed.status != 'cancelled'), 0) AS due_amount,
     CASE WHEN a.id IS NULL THEN 0 ELSE 1 END AS attended_today,
     CASE WHEN ms.id IS NULL THEN 'none'
       WHEN ms.status = 'cancelled' THEN 'cancelled'
+      WHEN ms.status = 'frozen' THEN 'frozen'
+      WHEN ms.start_date > ? THEN 'upcoming'
       WHEN ms.end_date < ? THEN 'expired'
       ELSE 'active' END AS snapshot_status,
     ? AS snapshot_date
@@ -153,24 +156,11 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase) {
     CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance(attendance_date);
 
     INSERT OR IGNORE INTO settings(key, value) VALUES
-      ('gym_name', 'Pulse Fitness'),
+      ('gym_name', ''),
       ('owner_name', ''),
       ('phone', ''),
       ('email', ''),
       ('address', '');
-
-    INSERT INTO plans(name, duration_months, amount, active)
-    SELECT '1 Month', 1, 600, 1
-    WHERE NOT EXISTS (SELECT 1 FROM plans);
-    INSERT INTO plans(name, duration_months, amount, active)
-    SELECT '3 Months', 3, 1600, 1
-    WHERE (SELECT COUNT(*) FROM plans) = 1;
-    INSERT INTO plans(name, duration_months, amount, active)
-    SELECT '6 Months', 6, 3000, 1
-    WHERE (SELECT COUNT(*) FROM plans) = 2;
-    INSERT INTO plans(name, duration_months, amount, active)
-    SELECT '12 Months', 12, 5500, 1
-    WHERE (SELECT COUNT(*) FROM plans) = 3;
 
     PRAGMA user_version = 1;
   `);
@@ -204,6 +194,25 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase) {
     await db.execAsync(CREATE_MEMBER_PHONE_GUARDS_SQL);
     await db.execAsync('PRAGMA user_version = 4;');
   }
+
+  if (currentVersion < 5) {
+    for (const [table, column] of [
+      ['memberships', 'plan_name'],
+      ['payments', 'voided_at'],
+      ['payments', 'void_reason'],
+    ]) {
+      const existing = await db.getFirstAsync<{ name: string }>(
+        `SELECT name FROM pragma_table_info('${table}') WHERE name = '${column}'`,
+      );
+      if (!existing) await db.execAsync(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT;`);
+    }
+    // Older records can only snapshot the catalog name available at migration time.
+    await db.execAsync(`
+      UPDATE memberships SET plan_name = (SELECT name FROM plans WHERE id = memberships.plan_id)
+      WHERE plan_name IS NULL;
+      PRAGMA user_version = 5;
+    `);
+  }
 }
 
 export async function getPlans(db: SQLiteDatabase) {
@@ -211,12 +220,10 @@ export async function getPlans(db: SQLiteDatabase) {
 }
 
 export async function updatePlanPrice(db: SQLiteDatabase, planId: number, amount: number) {
-  if (!Number.isFinite(amount) || amount <= 0) {
-    throw new Error('Plan price must be greater than ₹0.');
-  }
+  validateMoney(amount, 'Plan price', true);
   const result = await db.runAsync(
     'UPDATE plans SET amount = ? WHERE id = ? AND active = 1',
-    Math.round(amount),
+    roundMoney(amount),
     planId,
   );
   if (result.changes === 0) {
@@ -233,9 +240,7 @@ function validatePlan(name: string, durationMonths: number, amount: number) {
   if (!Number.isInteger(durationMonths) || durationMonths <= 0) {
     throw new Error('Plan duration must be at least 1 month.');
   }
-  if (!Number.isFinite(amount) || amount <= 0) {
-    throw new Error('Plan price must be greater than zero.');
-  }
+  validateMoney(amount, 'Plan price', true);
 }
 
 export async function createPlan(
@@ -249,7 +254,7 @@ export async function createPlan(
     'INSERT INTO plans(name, duration_months, amount, active) VALUES (?, ?, ?, 1)',
     name.trim(),
     durationMonths,
-    Math.round(amount),
+    roundMoney(amount),
   );
 }
 
@@ -265,39 +270,79 @@ export async function updatePlan(
     'UPDATE plans SET name = ?, duration_months = ?, amount = ? WHERE id = ?',
     name.trim(),
     durationMonths,
-    Math.round(amount),
+    roundMoney(amount),
     planId,
   );
   if (result.changes === 0) throw new Error('This membership plan could not be found.');
 }
 
 export async function setPlanActive(db: SQLiteDatabase, planId: number, active: boolean) {
-  if (!active) {
-    const activePlans = await db.getFirstAsync<{ count: number }>(
-      'SELECT COUNT(*) AS count FROM plans WHERE active = 1',
-    );
-    if ((activePlans?.count ?? 0) <= 1) {
-      throw new Error('Keep at least one membership plan active.');
-    }
-  }
   const result = await db.runAsync('UPDATE plans SET active = ? WHERE id = ?', active ? 1 : 0, planId);
   if (result.changes === 0) throw new Error('This membership plan could not be found.');
 }
 
-function normalizePhone(value: string) {
-  return value.replace(/\D/g, '');
+function validateDate(value: string, label: string, allowFuture = true) {
+  const date = new Date(`${value}T00:00:00Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(date.getTime())
+    || date.toISOString().slice(0, 10) !== value || (!allowFuture && value > todayIso())) {
+    throw new Error(`Enter a valid ${label}${allowFuture ? '' : ' no later than today'}.`);
+  }
+}
+
+function validatePaymentMethod(method: PaymentMethod) {
+  if (!(['Cash', 'UPI', 'Card', 'Bank transfer'] as string[]).includes(method)) {
+    throw new Error('Choose a valid payment method.');
+  }
+}
+
+function roundMoney(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+function validateMoney(value: number, label: string, positive = false) {
+  if (!Number.isFinite(value) || value < 0 || (positive && value === 0) || value > 10_000_000) {
+    throw new Error(`${label} must be ${positive ? 'greater than zero' : 'nonnegative'} and no more than ₹1,00,00,000.`);
+  }
+  if (Math.abs(value * 100 - Math.round(value * 100)) > 0.000001) {
+    throw new Error(`${label} can have at most two decimal places (paise).`);
+  }
+}
+
+function membershipAmounts(input: CreateMembershipInput | CreateMemberInput, plan: Plan) {
+  validateDate(input.joiningDate, 'membership start date');
+  validatePaymentMethod(input.paymentMethod);
+  for (const [label, value] of [
+    ['Discount', input.discountAmount], ['Admission fee', input.admissionFee],
+    ['Opening payment', input.initialPayment],
+  ] as const) {
+    validateMoney(value, label);
+  }
+  if (input.discountAmount > plan.amount) throw new Error('Discount cannot exceed the plan price.');
+  const totalAmount = roundMoney(plan.amount - input.discountAmount + input.admissionFee);
+  if (!Number.isFinite(totalAmount)) throw new Error('Membership total is invalid.');
+  if (input.initialPayment > totalAmount) throw new Error('Opening payment cannot exceed the membership total.');
+  // Legacy callers used the access start as the receipt date. Keep historical
+  // imports stable, but a future access period cannot create a future receipt.
+  const paymentDate = input.paymentDate ?? (input.joiningDate > todayIso() ? todayIso() : input.joiningDate);
+  if (input.initialPayment > 0) validateDate(paymentDate, 'opening payment date', false);
+  return {
+    discount: roundMoney(input.discountAmount), admissionFee: roundMoney(input.admissionFee),
+    totalAmount, payment: roundMoney(input.initialPayment), paymentDate,
+  };
 }
 
 async function assertUniquePhone(db: SQLiteDatabase, phone: string, excludedMemberId?: number) {
-  const existing = await db.getFirstAsync<{ id: number; name: string }>(
-    `SELECT id, name FROM members
-     WHERE phone = ?
-       AND (? IS NULL OR id != ?)
-     LIMIT 1`,
-    phone,
+  const members = await db.getAllAsync<{ id: number; name: string; phone: string }>(
+    'SELECT id, name, phone FROM members WHERE (? IS NULL OR id != ?)',
     excludedMemberId ?? null,
     excludedMemberId ?? null,
   );
+  // Legacy versions stored both 10-digit and 91-prefixed values. Compare their
+  // canonical identities without rewriting old profiles during migration.
+  const existing = members.find((member) => {
+    try { return normalizeMemberPhone(member.phone) === phone; }
+    catch { return member.phone === phone; }
+  });
   if (existing) {
     throw new Error(`This mobile number is already used by ${existing.name}.`);
   }
@@ -314,12 +359,13 @@ export async function getMembers(
     filter,
     snapshotDate,
     attendanceDate: todayIso(),
+    currentView: snapshotDate === todayIso(),
   });
   return db.getAllAsync<MemberListItem>(query.sql, ...query.args);
 }
 
 export async function getMemberDetail(db: SQLiteDatabase, memberId: number) {
-  const member = await db.getFirstAsync<Omit<MemberDetail, 'payments' | 'attendance_count'>>(
+  const member = await db.getFirstAsync<Omit<MemberDetail, 'payments' | 'attendance_count' | 'memberships' | 'lifetime_due_amount'>>(
     `SELECT
       m.id,
       m.membership_id,
@@ -330,14 +376,14 @@ export async function getMemberDetail(db: SQLiteDatabase, memberId: number) {
       m.status,
       m.joined_at,
       ms.plan_id,
-      p.name AS plan_name,
+      COALESCE(ms.plan_name, p.name) AS plan_name,
       ms.status AS membership_status,
       ms.end_date,
       COALESCE(ms.total_amount, 0) AS total_amount,
       COALESCE(ms.paid_amount, 0) AS paid_amount,
       CASE
-        WHEN ms.status = 'active'
-        THEN MAX(COALESCE(ms.total_amount, 0) - COALESCE(ms.paid_amount, 0), 0)
+        WHEN ms.status != 'cancelled'
+        THEN MAX(ROUND(COALESCE(ms.total_amount, 0) - COALESCE(ms.paid_amount, 0), 2), 0)
         ELSE 0
       END AS due_amount,
       CASE WHEN a.id IS NULL THEN 0 ELSE 1 END AS attended_today,
@@ -370,32 +416,53 @@ export async function getMemberDetail(db: SQLiteDatabase, memberId: number) {
     'SELECT * FROM payments WHERE member_id = ? ORDER BY paid_at DESC, id DESC',
     memberId,
   );
+  const memberships = await db.getAllAsync<Membership>(
+    `SELECT ms.*, COALESCE(ms.plan_name, p.name, 'Membership') AS plan_name,
+      CASE WHEN ms.status != 'cancelled' THEN MAX(ROUND(ms.total_amount - ms.paid_amount, 2), 0) ELSE 0 END AS due_amount
+     FROM memberships ms JOIN plans p ON p.id = ms.plan_id
+     WHERE ms.member_id = ? ORDER BY ms.start_date DESC, ms.id DESC`,
+    memberId,
+  );
   const attendance = await db.getFirstAsync<{ count: number }>(
     'SELECT COUNT(*) AS count FROM attendance WHERE member_id = ?',
     memberId,
   );
-  return { ...member, payments, attendance_count: attendance?.count ?? 0 };
+  return {
+    ...member,
+    payments,
+    memberships,
+    lifetime_due_amount: roundMoney(memberships.reduce((sum, membership) => sum + membership.due_amount, 0)),
+    attendance_count: attendance?.count ?? 0,
+    snapshot_date: todayIso(),
+    snapshot_status: !member.membership_row_id ? 'none' as const
+      : member.membership_status === 'cancelled' ? 'cancelled' as const
+        : member.membership_status === 'frozen' ? 'frozen' as const
+          : member.start_date! > todayIso() ? 'upcoming' as const
+            : member.end_date! < todayIso() ? 'expired' as const : 'active' as const,
+  };
 }
 
-export async function createMember(db: SQLiteDatabase, input: CreateMemberInput) {
-  const plan = await db.getFirstAsync<Plan>('SELECT * FROM plans WHERE id = ?', input.planId);
-  if (!plan) throw new Error('The selected plan no longer exists.');
-  const phone = normalizePhone(input.phone);
-  await assertUniquePhone(db, phone);
-
-  const nextId = await db.getFirstAsync<{ next_id: number }>(
-    'SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM members',
-  );
-  const membershipCode = `PF-${String(nextId?.next_id ?? 1).padStart(4, '0')}`;
-  const discount = Math.max(0, input.discountAmount || 0);
-  const admissionFee = Math.max(0, input.admissionFee || 0);
-  const totalAmount = Math.max(0, plan.amount - discount + admissionFee);
-  const payment = Math.min(Math.max(0, input.initialPayment || 0), totalAmount);
-  const endDate = addMonths(input.joiningDate, plan.duration_months);
+export async function createMember(
+  db: SQLiteDatabase,
+  input: CreateMemberInput,
+  options: { inTransaction?: boolean } = {},
+) {
+  if (!input.name.trim()) throw new Error('Enter a member name.');
+  if (!['Male', 'Female', 'Other'].includes(input.gender)) throw new Error('Choose a valid gender.');
+  const phone = normalizeMemberPhone(input.phone);
+  if (input.dateOfBirth) validateDate(input.dateOfBirth, 'date of birth', false);
   let memberId = 0;
-
-  await db.withTransactionAsync(async () => {
-    const memberResult = await db.runAsync(
+  const write = async (transaction: SQLiteDatabase) => {
+    const plan = await transaction.getFirstAsync<Plan>('SELECT * FROM plans WHERE id = ? AND active = 1', input.planId);
+    if (!plan) throw new Error('The selected plan is no longer active.');
+    const { discount, admissionFee, totalAmount, payment, paymentDate } = membershipAmounts(input, plan);
+    const endDate = addMonths(input.joiningDate, plan.duration_months);
+    await assertUniquePhone(transaction, phone);
+    const nextId = await transaction.getFirstAsync<{ next_id: number }>(
+      'SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM members',
+    );
+    const membershipCode = `PF-${String(nextId?.next_id ?? 1).padStart(4, '0')}`;
+    const memberResult = await transaction.runAsync(
       `INSERT INTO members
        (membership_id, name, gender, phone, email, date_of_birth, address, notes, photo_uri, joined_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -412,12 +479,13 @@ export async function createMember(db: SQLiteDatabase, input: CreateMemberInput)
     );
     memberId = Number(memberResult.lastInsertRowId);
 
-    const membershipResult = await db.runAsync(
+    const membershipResult = await transaction.runAsync(
       `INSERT INTO memberships
-       (member_id, plan_id, start_date, end_date, base_amount, discount_amount, admission_fee, total_amount, paid_amount)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (member_id, plan_id, plan_name, start_date, end_date, base_amount, discount_amount, admission_fee, total_amount, paid_amount)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       memberId,
       plan.id,
+      plan.name,
       input.joiningDate,
       endDate,
       plan.amount,
@@ -428,19 +496,20 @@ export async function createMember(db: SQLiteDatabase, input: CreateMemberInput)
     );
 
     if (payment > 0) {
-      await db.runAsync(
+      await transaction.runAsync(
         `INSERT INTO payments(member_id, membership_id, amount, method, paid_at, note)
          VALUES (?, ?, ?, ?, ?, ?)`,
         memberId,
         Number(membershipResult.lastInsertRowId),
         payment,
         input.paymentMethod,
-        input.joiningDate,
+        paymentDate,
         'Initial payment',
       );
     }
-  });
-
+  };
+  if (options.inTransaction) await write(db);
+  else await db.withExclusiveTransactionAsync(write);
   return memberId;
 }
 
@@ -449,11 +518,14 @@ export async function updateMemberProfile(
   memberId: number,
   input: UpdateMemberInput,
 ) {
-  const phone = normalizePhone(input.phone);
-  await assertUniquePhone(db, phone, memberId);
-
-  await db.withTransactionAsync(async () => {
-    const result = await db.runAsync(
+  if (!input.name.trim()) throw new Error('Enter a member name.');
+  if (!['Male', 'Female', 'Other'].includes(input.gender)) throw new Error('Choose a valid gender.');
+  validateDate(input.joinedAt, 'joining date');
+  if (input.dateOfBirth) validateDate(input.dateOfBirth, 'date of birth', false);
+  const phone = normalizeMemberPhone(input.phone);
+  await db.withExclusiveTransactionAsync(async (transaction) => {
+    await assertUniquePhone(transaction, phone, memberId);
+    const result = await transaction.runAsync(
       `UPDATE members
        SET name = ?, gender = ?, phone = ?, email = ?, date_of_birth = ?, address = ?,
          notes = ?, photo_uri = ?, joined_at = ?, updated_at = CURRENT_TIMESTAMP
@@ -471,92 +543,51 @@ export async function updateMemberProfile(
     );
     if (result.changes === 0) throw new Error('Member not found.');
 
-    const membershipCount = await db.getFirstAsync<{ count: number }>(
-      'SELECT COUNT(*) AS count FROM memberships WHERE member_id = ?',
-      memberId,
-    );
-    if ((membershipCount?.count ?? 0) === 1) {
-      const membership = await db.getFirstAsync<{ id: number; duration_months: number }>(
-        `SELECT ms.id, p.duration_months
-         FROM memberships ms
-         JOIN plans p ON p.id = ms.plan_id
-         WHERE ms.member_id = ?
-         ORDER BY ms.start_date DESC, ms.id DESC
-         LIMIT 1`,
-        memberId,
-      );
-      if (membership) {
-        await db.runAsync(
-          'UPDATE memberships SET start_date = ?, end_date = ? WHERE id = ?',
-          input.joinedAt,
-          addMonths(input.joinedAt, membership.duration_months),
-          membership.id,
-        );
-      }
-    }
+    // joined_at is profile metadata. A profile edit must never alter purchased access.
   });
 }
 
 export async function createMembership(db: SQLiteDatabase, input: CreateMembershipInput) {
-  const [member, plan, current] = await Promise.all([
-    db.getFirstAsync<{ id: number }>('SELECT id FROM members WHERE id = ?', input.memberId),
-    db.getFirstAsync<Plan>('SELECT * FROM plans WHERE id = ? AND active = 1', input.planId),
-    db.getFirstAsync<{ id: number; end_date: string; status: string }>(
+  let membershipId = 0;
+  await db.withExclusiveTransactionAsync(async (transaction) => {
+    const member = await transaction.getFirstAsync<{ id: number }>('SELECT id FROM members WHERE id = ?', input.memberId);
+    const plan = await transaction.getFirstAsync<Plan>('SELECT * FROM plans WHERE id = ? AND active = 1', input.planId);
+    const current = await transaction.getFirstAsync<{ id: number; end_date: string; status: string }>(
       `SELECT id, end_date, status FROM memberships
        WHERE member_id = ? ORDER BY start_date DESC, id DESC LIMIT 1`,
       input.memberId,
-    ),
-  ]);
-  if (!member) throw new Error('Member not found.');
-  if (!plan) throw new Error('The selected plan is no longer active.');
-  if (current?.status === 'active' && current.end_date >= todayIso()) {
-    throw new Error('This member already has an active membership. Cancel it before assigning another plan.');
-  }
-
-  const discount = Math.max(0, input.discountAmount || 0);
-  const admissionFee = Math.max(0, input.admissionFee || 0);
-  const totalAmount = Math.max(0, plan.amount - discount + admissionFee);
-  const payment = Math.min(Math.max(0, input.initialPayment || 0), totalAmount);
-  const endDate = addMonths(input.joiningDate, plan.duration_months);
-  let membershipId = 0;
-
-  await db.withTransactionAsync(async () => {
-    if (current?.status === 'active') {
-      await db.runAsync("UPDATE memberships SET status = 'expired' WHERE id = ?", current.id);
+    );
+    if (!member) throw new Error('Member not found.');
+    if (!plan) throw new Error('The selected plan is no longer active.');
+    if (current?.status === 'active' && current.end_date >= todayIso()) {
+      throw new Error('This member already has an active membership. Cancel it before assigning another plan.');
     }
-    const result = await db.runAsync(
+    const { discount, admissionFee, totalAmount, payment, paymentDate } = membershipAmounts(input, plan);
+    const endDate = addMonths(input.joiningDate, plan.duration_months);
+    if (current?.status === 'active') {
+      await transaction.runAsync("UPDATE memberships SET status = 'expired' WHERE id = ?", current.id);
+    }
+    const result = await transaction.runAsync(
       `INSERT INTO memberships
-       (member_id, plan_id, start_date, end_date, base_amount, discount_amount, admission_fee, total_amount, paid_amount)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      input.memberId,
-      plan.id,
-      input.joiningDate,
-      endDate,
-      plan.amount,
-      discount,
-      admissionFee,
-      totalAmount,
-      payment,
+       (member_id, plan_id, plan_name, start_date, end_date, base_amount, discount_amount, admission_fee, total_amount, paid_amount)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      input.memberId, plan.id, plan.name, input.joiningDate, endDate,
+      plan.amount, discount, admissionFee, totalAmount, payment,
     );
     membershipId = Number(result.lastInsertRowId);
     if (payment > 0) {
-      await db.runAsync(
+      await transaction.runAsync(
         `INSERT INTO payments(member_id, membership_id, amount, method, paid_at, note)
          VALUES (?, ?, ?, ?, ?, ?)`,
-        input.memberId,
-        membershipId,
-        payment,
-        input.paymentMethod,
-        input.joiningDate,
+        input.memberId, membershipId, payment, input.paymentMethod, paymentDate,
         'Membership opening payment',
       );
     }
-    await db.runAsync(
+    await transaction.runAsync(
       "UPDATE members SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
       input.memberId,
     );
   });
-
   return membershipId;
 }
 
@@ -566,47 +597,50 @@ export async function changeMembershipPlan(
   membershipId: number,
   planId: number,
 ) {
-  const [membership, plan] = await Promise.all([
-    db.getFirstAsync<{
-      id: number;
-      start_date: string;
-      paid_amount: number;
-      discount_amount: number;
-      admission_fee: number;
-      status: string;
-    }>(
-      `SELECT id, start_date, paid_amount, discount_amount, admission_fee, status
-       FROM memberships
-       WHERE id = ? AND member_id = ?`,
+  await db.withExclusiveTransactionAsync(async (transaction) => {
+    const [membership, plan] = await Promise.all([
+      transaction.getFirstAsync<{
+        id: number;
+        start_date: string;
+        paid_amount: number;
+        discount_amount: number;
+        admission_fee: number;
+        status: string;
+      }>(
+        `SELECT id, start_date, paid_amount, discount_amount, admission_fee, status
+         FROM memberships
+         WHERE id = ? AND member_id = ?`,
+        membershipId,
+        memberId,
+      ),
+      transaction.getFirstAsync<Plan>('SELECT * FROM plans WHERE id = ? AND active = 1', planId),
+    ]);
+
+    if (!membership) throw new Error('Membership not found.');
+    if (membership.status !== 'active') {
+      throw new Error('Only an active membership plan can be changed.');
+    }
+    if (!plan) throw new Error('The selected plan is no longer active.');
+
+    const discount = Math.max(0, membership.discount_amount || 0);
+    const admissionFee = Math.max(0, membership.admission_fee || 0);
+    const plannedTotal = roundMoney(Math.max(0, plan.amount - discount + admissionFee));
+    const totalAmount = Math.max(plannedTotal, membership.paid_amount);
+
+    const result = await transaction.runAsync(
+      `UPDATE memberships
+       SET plan_id = ?, plan_name = ?, end_date = ?, base_amount = ?, total_amount = ?
+       WHERE id = ? AND member_id = ? AND status = 'active'`,
+      plan.id,
+      plan.name,
+      addMonths(membership.start_date, plan.duration_months),
+      plan.amount,
+      totalAmount,
       membershipId,
       memberId,
-    ),
-    db.getFirstAsync<Plan>('SELECT * FROM plans WHERE id = ? AND active = 1', planId),
-  ]);
-
-  if (!membership) throw new Error('Membership not found.');
-  if (membership.status !== 'active') {
-    throw new Error('Only an active membership plan can be changed.');
-  }
-  if (!plan) throw new Error('The selected plan is no longer active.');
-
-  const discount = Math.max(0, membership.discount_amount || 0);
-  const admissionFee = Math.max(0, membership.admission_fee || 0);
-  const plannedTotal = Math.max(0, plan.amount - discount + admissionFee);
-  const totalAmount = Math.max(plannedTotal, membership.paid_amount);
-
-  const result = await db.runAsync(
-    `UPDATE memberships
-     SET plan_id = ?, end_date = ?, base_amount = ?, total_amount = ?
-     WHERE id = ? AND member_id = ? AND status = 'active'`,
-    plan.id,
-    addMonths(membership.start_date, plan.duration_months),
-    plan.amount,
-    totalAmount,
-    membershipId,
-    memberId,
-  );
-  if (result.changes === 0) throw new Error('This membership is no longer active.');
+    );
+    if (result.changes === 0) throw new Error('This membership is no longer active.');
+  });
 }
 
 export async function addPayment(
@@ -618,39 +652,61 @@ export async function addPayment(
   paidAt: string,
   note?: string,
 ) {
-  const membership = await db.getFirstAsync<{
-    total_amount: number;
-    paid_amount: number;
-    status: string;
-  }>(
-    'SELECT total_amount, paid_amount, status FROM memberships WHERE id = ? AND member_id = ?',
-    membershipId,
-    memberId,
-  );
-  if (!membership) throw new Error('Membership not found.');
-  if (membership.status !== 'active') {
-    throw new Error('Payments can only be added to an active membership.');
-  }
-  const remaining = Math.max(0, membership.total_amount - membership.paid_amount);
-  if (amount <= 0 || amount > remaining) {
-    throw new Error(`Payment must be between ₹1 and ₹${remaining}.`);
-  }
-
-  await db.withTransactionAsync(async () => {
-    await db.runAsync(
+  validateMoney(amount, 'Payment amount', true);
+  amount = roundMoney(amount);
+  validateDate(paidAt, 'payment date', false);
+  validatePaymentMethod(method);
+  await db.withExclusiveTransactionAsync(async (transaction) => {
+    const membership = await transaction.getFirstAsync<{
+      total_amount: number; paid_amount: number; status: string;
+    }>(
+      'SELECT total_amount, paid_amount, status FROM memberships WHERE id = ? AND member_id = ?',
+      membershipId, memberId,
+    );
+    if (!membership) throw new Error('Membership not found.');
+    if (!['active', 'expired', 'frozen'].includes(membership.status)) {
+      throw new Error('Payments cannot be added to cancelled memberships.');
+    }
+    const remaining = roundMoney(Math.max(0, membership.total_amount - membership.paid_amount));
+    if (amount > remaining) throw new Error(`Payment cannot exceed the remaining ₹${remaining}.`);
+    await transaction.runAsync(
       `INSERT INTO payments(member_id, membership_id, amount, method, paid_at, note)
        VALUES (?, ?, ?, ?, ?, ?)`,
-      memberId,
-      membershipId,
-      amount,
-      method,
-      paidAt,
-      note?.trim() || null,
+      memberId, membershipId, amount, method, paidAt, note?.trim() || null,
     );
-    await db.runAsync(
-      'UPDATE memberships SET paid_amount = paid_amount + ? WHERE id = ?',
-      amount,
-      membershipId,
+    await transaction.runAsync(
+      'UPDATE memberships SET paid_amount = ROUND(paid_amount + ?, 2) WHERE id = ?',
+      amount, membershipId,
+    );
+  });
+}
+
+/**
+ * Correct a mistaken entry, not a refund. The positive original remains auditable.
+ * Financial views (including historical snapshots) exclude corrected/voided rows.
+ */
+export async function reversePayment(
+  db: SQLiteDatabase,
+  memberId: number,
+  paymentId: number,
+  reason: string,
+) {
+  if (!reason.trim()) throw new Error('Enter a reason for reversing this payment.');
+  await db.withExclusiveTransactionAsync(async (transaction) => {
+    const payment = await transaction.getFirstAsync<Payment>(
+      'SELECT * FROM payments WHERE id = ? AND member_id = ?', paymentId, memberId,
+    );
+    if (!payment) throw new Error('Payment not found.');
+    if (payment.voided_at) throw new Error('This payment has already been reversed.');
+    const adjusted = await transaction.runAsync(
+      `UPDATE memberships SET paid_amount = MAX(0, ROUND(paid_amount - ?, 2))
+       WHERE id = ? AND member_id = ? AND ROUND(paid_amount, 2) >= ?`,
+      payment.amount, payment.membership_id, memberId, payment.amount,
+    );
+    if (!adjusted.changes) throw new Error('Payment balance is inconsistent; this entry could not be reversed.');
+    await transaction.runAsync(
+      'UPDATE payments SET voided_at = ?, void_reason = ? WHERE id = ? AND voided_at IS NULL',
+      new Date().toISOString(), reason.trim(), paymentId,
     );
   });
 }
@@ -722,7 +778,7 @@ export async function getDashboardStats(db: SQLiteDatabase): Promise<DashboardSt
     expiring_soon: number;
   }>(
     `SELECT
-      SUM(CASE WHEN m.status = 'active' AND ms.status = 'active' AND ms.end_date >= ? THEN 1 ELSE 0 END) AS active_members,
+      SUM(CASE WHEN m.status = 'active' AND ms.status = 'active' AND ms.start_date <= ? AND ms.end_date >= ? THEN 1 ELSE 0 END) AS active_members,
       COUNT(*) AS total_members,
       SUM(CASE WHEN ms.status = 'active' AND ms.end_date BETWEEN ? AND date(?, '+7 day') THEN 1 ELSE 0 END) AS expiring_soon
      FROM members m
@@ -733,14 +789,15 @@ export async function getDashboardStats(db: SQLiteDatabase): Promise<DashboardSt
     today,
     today,
     today,
+    today,
   );
   const finance = await db.getFirstAsync<{ collected: number; due: number }>(
     `SELECT
-      COALESCE((SELECT SUM(amount) FROM payments WHERE paid_at BETWEEN ? AND ?), 0) AS collected,
-      COALESCE((SELECT SUM(CASE
-        WHEN status != 'cancelled' THEN MAX(total_amount - paid_amount, 0)
+      COALESCE((SELECT ROUND(SUM(amount), 2) FROM payments WHERE voided_at IS NULL AND paid_at BETWEEN ? AND ?), 0) AS collected,
+      COALESCE((SELECT ROUND(SUM(CASE
+        WHEN status != 'cancelled' THEN MAX(ROUND(total_amount - paid_amount, 2), 0)
         ELSE 0
-      END) FROM memberships), 0) AS due`,
+      END), 2) FROM memberships), 0) AS due`,
     monthStart,
     today,
   );
@@ -756,6 +813,7 @@ export async function getDashboardStats(db: SQLiteDatabase): Promise<DashboardSt
     today,
     today,
     today,
+    today,
   );
   const expiringMembers = await db.getAllAsync<MemberListItem>(
     `${MEMBER_LIST_QUERY}
@@ -763,6 +821,7 @@ export async function getDashboardStats(db: SQLiteDatabase): Promise<DashboardSt
        AND ms.end_date BETWEEN ? AND date(?, '+7 day')
      ORDER BY ms.end_date ASC
      LIMIT 5`,
+    today,
     today,
     today,
     today,
@@ -812,20 +871,22 @@ export async function getReportData(db: SQLiteDatabase): Promise<ReportData> {
        WHERE m.status = 'active'
          AND EXISTS (
            SELECT 1 FROM memberships ms
-           WHERE ms.member_id = m.id AND ms.status = 'active'
+           WHERE ms.member_id = m.id AND ms.status = 'active' AND ms.start_date <= ? AND ms.end_date >= ?
          )) AS active_members,
-      COALESCE(SUM(CASE WHEN status = 'cancelled' THEN paid_amount ELSE total_amount END), 0) AS total_billed,
-      COALESCE(SUM(paid_amount), 0) AS total_collected,
-      COALESCE(SUM(CASE
-        WHEN status != 'cancelled' THEN MAX(total_amount - paid_amount, 0)
+      COALESCE(ROUND(SUM(CASE WHEN status = 'cancelled' THEN paid_amount ELSE total_amount END), 2), 0) AS total_billed,
+      COALESCE((SELECT ROUND(SUM(amount), 2) FROM payments WHERE voided_at IS NULL), 0) AS total_collected,
+      COALESCE(ROUND(SUM(CASE
+        WHEN status != 'cancelled' THEN MAX(ROUND(total_amount - paid_amount, 2), 0)
         ELSE 0
-      END), 0) AS total_due
+      END), 2), 0) AS total_due
      FROM memberships`,
+    today,
+    today,
   );
   const month = await db.getFirstAsync<{ collected: number; expenses: number }>(
     `SELECT
-      COALESCE((SELECT SUM(amount) FROM payments WHERE paid_at BETWEEN ? AND ?), 0) AS collected,
-      COALESCE((SELECT SUM(amount) FROM expenses WHERE expense_date BETWEEN ? AND ?), 0) AS expenses`,
+      COALESCE((SELECT ROUND(SUM(amount), 2) FROM payments WHERE voided_at IS NULL AND paid_at BETWEEN ? AND ?), 0) AS collected,
+      COALESCE((SELECT ROUND(SUM(amount), 2) FROM expenses WHERE expense_date BETWEEN ? AND ?), 0) AS expenses`,
     monthStart,
     today,
     monthStart,
@@ -838,7 +899,7 @@ export async function getReportData(db: SQLiteDatabase): Promise<ReportData> {
     date.setMonth(date.getMonth() - offset);
     const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
     const total = await db.getFirstAsync<{ amount: number }>(
-      'SELECT COALESCE(SUM(amount), 0) AS amount FROM payments WHERE substr(paid_at, 1, 7) = ?',
+      'SELECT COALESCE(ROUND(SUM(amount), 2), 0) AS amount FROM payments WHERE voided_at IS NULL AND substr(paid_at, 1, 7) = ?',
       key,
     );
     monthlyCollection.push({
@@ -847,8 +908,9 @@ export async function getReportData(db: SQLiteDatabase): Promise<ReportData> {
     });
   }
   const paymentMethods = await db.getAllAsync<{ method: string; amount: number }>(
-    `SELECT method, SUM(amount) AS amount
+    `SELECT method, ROUND(SUM(amount), 2) AS amount
      FROM payments
+     WHERE voided_at IS NULL
      GROUP BY method
      ORDER BY amount DESC`,
   );
@@ -856,6 +918,7 @@ export async function getReportData(db: SQLiteDatabase): Promise<ReportData> {
     `SELECT p.*, m.name AS member_name
      FROM payments p
      JOIN members m ON m.id = p.member_id
+     WHERE p.voided_at IS NULL
      ORDER BY p.paid_at DESC, p.id DESC
      LIMIT 10`,
   );
@@ -872,7 +935,7 @@ export async function getReportData(db: SQLiteDatabase): Promise<ReportData> {
     totalDue: summary?.total_due ?? 0,
     collectedThisMonth,
     expensesThisMonth,
-    netThisMonth: collectedThisMonth - expensesThisMonth,
+    netThisMonth: roundMoney(collectedThisMonth - expensesThisMonth),
     monthlyCollection,
     paymentMethods,
     recentPayments,
@@ -889,7 +952,7 @@ export async function getPaymentHistory(
   return {
     items,
     count: items.length,
-    total: items.reduce((sum, item) => sum + item.amount, 0),
+    total: roundMoney(items.reduce((sum, item) => sum + (item.voided_at ? 0 : item.amount), 0)),
   };
 }
 
@@ -902,14 +965,12 @@ export async function addExpense(
   notes?: string,
 ) {
   if (!title.trim()) throw new Error('Enter an expense title.');
-  if (!Number.isFinite(amount) || amount <= 0) {
-    throw new Error('Expense amount must be greater than zero.');
-  }
+  validateMoney(amount, 'Expense amount', true);
   await db.runAsync(
     `INSERT INTO expenses(title, amount, expense_date, category, notes)
      VALUES (?, ?, ?, ?, ?)`,
     title.trim(),
-    Math.round(amount),
+    roundMoney(amount),
     expenseDate,
     category.trim() || 'General',
     notes?.trim() || null,
@@ -925,7 +986,7 @@ export async function getGymProfile(db: SQLiteDatabase): Promise<GymProfile> {
   const rows = await db.getAllAsync<{ key: string; value: string }>('SELECT key, value FROM settings');
   const settings = Object.fromEntries(rows.map((row) => [row.key, row.value]));
   return {
-    gymName: settings.gym_name || 'Pulse Fitness',
+    gymName: settings.gym_name || '',
     ownerName: settings.owner_name || '',
     phone: settings.phone || '',
     email: settings.email || '',

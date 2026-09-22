@@ -3,7 +3,7 @@ export type MemberStatus = 'active' | 'blocked' | 'archived';
 export type MembershipStatus = 'active' | 'expired' | 'frozen' | 'cancelled';
 export type PaymentMethod = 'Cash' | 'UPI' | 'Card' | 'Bank transfer';
 export type MemberFilter = 'all' | 'active' | 'due' | 'paid' | 'expired' | 'cancelled';
-export type SnapshotStatus = 'none' | 'active' | 'expired' | 'cancelled';
+export type SnapshotStatus = 'none' | 'active' | 'expired' | 'cancelled' | 'upcoming' | 'frozen';
 
 export type Plan = {
   id: number;
@@ -53,6 +53,24 @@ export type Payment = {
   paid_at: string;
   note: string | null;
   created_at: string;
+  voided_at: string | null;
+  void_reason: string | null;
+};
+
+export type Membership = {
+  id: number;
+  member_id: number;
+  plan_id: number;
+  plan_name: string;
+  start_date: string;
+  end_date: string;
+  base_amount: number;
+  discount_amount: number;
+  admission_fee: number;
+  total_amount: number;
+  paid_amount: number;
+  due_amount: number;
+  status: MembershipStatus;
 };
 
 export type PaymentHistoryMethod = 'all' | PaymentMethod;
@@ -60,6 +78,7 @@ export type PaymentHistoryFilters = {
   search: string;
   month: string | null;
   method: PaymentHistoryMethod;
+  includeVoided?: boolean;
 };
 export type PaymentHistoryItem = Payment & {
   member_name: string;
@@ -84,6 +103,8 @@ export type MemberDetail = MemberListItem & {
   admission_fee: number;
   membership_status: MembershipStatus | null;
   payments: Payment[];
+  memberships: Membership[];
+  lifetime_due_amount: number;
   attendance_count: number;
 };
 
@@ -136,6 +157,7 @@ export type CreateMemberInput = {
   admissionFee: number;
   initialPayment: number;
   paymentMethod: PaymentMethod;
+  paymentDate?: string;
 };
 
 export type UpdateMemberInput = {
@@ -158,4 +180,5 @@ export type CreateMembershipInput = {
   admissionFee: number;
   initialPayment: number;
   paymentMethod: PaymentMethod;
+  paymentDate?: string;
 };

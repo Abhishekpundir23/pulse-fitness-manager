@@ -3,7 +3,8 @@ import { router } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Avatar } from '@/components/ui-kit';
-import { formatCurrency, formatDate, todayIso } from '@/lib/format';
+import { formatDate, todayIso } from '@/lib/format';
+import { memberBalanceLabel } from '@/lib/member-presentation';
 import { palette, radii } from '@/lib/theme';
 import type { MemberListItem } from '@/lib/types';
 
@@ -34,7 +35,9 @@ export function MemberCard({
       ? `Expired ${formatDate(member.end_date, { day: '2-digit', month: 'short' })}`
       : member.snapshot_status === 'active'
         ? `Ends ${formatDate(member.end_date, { day: '2-digit', month: 'short' })}`
-        : 'No membership';
+        : member.snapshot_status === 'upcoming' ? 'Starts later'
+          : member.snapshot_status === 'frozen' ? 'Frozen'
+            : 'No membership';
 
   return (
     <Pressable
@@ -65,13 +68,9 @@ export function MemberCard({
             <Text style={[
               styles.due,
               member.due_amount === 0 && styles.paid,
-              (cancelled || member.snapshot_status === 'none') && styles.cancelled,
+              member.due_amount === 0 && (cancelled || member.snapshot_status === 'none') && styles.cancelled,
             ]}>
-              {cancelled || member.snapshot_status === 'none'
-                ? 'No due'
-                : member.due_amount > 0
-                  ? `${formatCurrency(member.due_amount)} due`
-                  : 'Paid'}
+              {memberBalanceLabel(member.due_amount, member.snapshot_status)}
             </Text>
           </View>
         )}

@@ -18,7 +18,8 @@ import {
   TopBar,
 } from '@/components/ui-kit';
 import { useAppData } from '@/contexts/app-data';
-import { getDashboardStats, getGymProfile } from '@/lib/database';
+import { getBackupStatus, getDashboardStats, getGymProfile, getPlans } from '@/lib/database';
+import { getBackupAgeReminder } from '@/lib/backup-safety';
 import { formatCurrency } from '@/lib/format';
 import { palette, radii, shadows } from '@/lib/theme';
 import type { DashboardStats, GymProfile } from '@/lib/types';
@@ -26,16 +27,26 @@ import type { DashboardStats, GymProfile } from '@/lib/types';
 export default function DashboardScreen() {
   const db = useSQLiteContext();
   const { revision } = useAppData();
+  const [loadError, setLoadError] = useState('');
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [backupAt, setBackupAt] = useState('');
+  const [planCount, setPlanCount] = useState(0);
   const [profile, setProfile] = useState<GymProfile | null>(null);
 
   const load = useCallback(async () => {
-    const [nextStats, nextProfile] = await Promise.all([
+    try {
+    const [nextStats, nextProfile, plans, backupStatus] = await Promise.all([
       getDashboardStats(db),
       getGymProfile(db),
+      getPlans(db),
+      getBackupStatus(db),
     ]);
     setStats(nextStats);
     setProfile(nextProfile);
+    setPlanCount(plans.length);
+    setBackupAt(backupStatus.exportedAt);
+    setLoadError('');
+    } catch (error) { setLoadError(error instanceof Error ? error.message : 'Please try again.'); }
   }, [db]);
 
   useFocusEffect(useCallback(() => {
@@ -43,15 +54,17 @@ export default function DashboardScreen() {
     load();
   }, [load, revision]));
 
+  if (loadError) return <Screen><EmptyState icon="alert-circle-outline" title="Could not load your gym" message={loadError} action={<PrimaryButton label="Try again" onPress={load} />} /></Screen>;
   if (!stats) return <Screen><LoadingView /></Screen>;
 
+  const backupReminder = getBackupAgeReminder(backupAt);
   const maxAttendance = Math.max(1, ...stats.weeklyAttendance.map((item) => item.count));
 
   return (
     <Screen>
       <TopBar
         eyebrow="Gym command centre"
-        title={profile?.gymName || 'Pulse Fitness'}
+        title={profile?.gymName || 'Welcome to your gym'}
         subtitle="Your business, today at a glance"
         action={
           <IconButton
@@ -62,6 +75,15 @@ export default function DashboardScreen() {
           />
         }
       />
+
+      {(!profile?.gymName.trim() || planCount === 0) && (
+        <Section title="Set up your gym" subtitle="Make this app yours in a few minutes">
+          <Text style={styles.setupStep}>{profile?.gymName.trim() ? '✓' : '1.'} Add your gym name and contact details</Text>
+          <Text style={styles.setupStep}>{planCount > 0 ? '✓' : '2.'} Create your own membership plans and prices</Text>
+          <Text style={styles.setupStep}>3. Add members or import your CSV list</Text>
+          <PrimaryButton label="Set up my gym" icon="business-outline" onPress={() => router.push('/settings')} />
+        </Section>
+      )}
 
       <LinearGradient
         colors={[palette.ink, '#15352D']}
@@ -93,6 +115,12 @@ export default function DashboardScreen() {
           </Pressable>
         </View>
       </LinearGradient>
+
+      {stats.totalMembers > 0 && backupReminder.overdue && (
+        <Section title="Keep a backup off this phone" subtitle={backupReminder.message}>
+          <PrimaryButton label="Save a backup" icon="shield-checkmark-outline" variant="secondary" onPress={() => router.push('/settings')} />
+        </Section>
+      )}
 
       <View style={styles.statsGrid}>
         <StatCard icon="people" label="Active members" value={String(stats.activeMembers)} />
@@ -176,6 +204,7 @@ export default function DashboardScreen() {
 }
 
 const styles = StyleSheet.create({
+  setupStep: { color: palette.inkSoft, fontSize: 13, lineHeight: 21, marginBottom: 12 },
   hero: {
     borderRadius: radii.xl,
     padding: 22,

@@ -1,88 +1,81 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSQLiteContext } from 'expo-sqlite';
-import { useCallback, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { router } from 'expo-router';
+import { useCallback, useRef, useState } from 'react';
+import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { FormField, LoadingView, PrimaryButton, Screen, Section, TopBar } from '@/components/ui-kit';
+import { EmptyState, FormField, LoadingView, PrimaryButton, Screen, Section, TopBar } from '@/components/ui-kit';
 import { useAppData } from '@/contexts/app-data';
-import {
-  prepareBackup,
-  restoreBackup,
-  savePreparedBackup,
-  sharePreparedBackup,
-  type PreparedBackup,
-} from '@/lib/backup';
+import { BackupSettings } from '@/components/backup-settings';
 import {
   createPlan,
   getAllPlans,
-  getBackupDataHealth,
-  getBackupStatus,
   getGymProfile,
-  saveBackupStatus,
   saveGymProfile,
   setPlanActive,
   updatePlan,
-  type BackupDataHealth,
-  type BackupStatus,
 } from '@/lib/database';
 import { formatCurrency } from '@/lib/format';
 import { palette, radii } from '@/lib/theme';
 import type { GymProfile, Plan } from '@/lib/types';
 
 const EMPTY_PROFILE: GymProfile = { gymName: '', ownerName: '', phone: '', email: '', address: '' };
-const CLEAN_BACKUP_DATA: BackupDataHealth = { duplicatePhoneGroups: 0, duplicatePhoneMembers: 0 };
 
 export default function SettingsScreen() {
   const db = useSQLiteContext();
-  const { refreshData } = useAppData();
+  const { revision, refreshData } = useAppData();
+  const profileDirty = useRef(false);
+  const [loadError, setLoadError] = useState('');
   const [profile, setProfile] = useState<GymProfile | null>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
-  const [backupStatus, setBackupStatus] = useState<BackupStatus>({ exportedAt: '', filename: '' });
-  const [backupDataHealth, setBackupDataHealth] = useState<BackupDataHealth>(CLEAN_BACKUP_DATA);
   const [saving, setSaving] = useState(false);
-  const [backupBusy, setBackupBusy] = useState(false);
   const [planEditorOpen, setPlanEditorOpen] = useState(false);
   const [editingPlan, setEditingPlan] = useState<Plan | null>(null);
   const [planName, setPlanName] = useState('');
   const [planDuration, setPlanDuration] = useState('');
   const [planPrice, setPlanPrice] = useState('');
+  const planSavingRef = useRef(false);
+  const profileSavingRef = useRef(false);
   const [planSaving, setPlanSaving] = useState(false);
 
   const load = useCallback(async () => {
-    const [nextProfile, nextPlans, nextBackupStatus, nextBackupDataHealth] = await Promise.all([
+    const [nextProfile, nextPlans] = await Promise.all([
       getGymProfile(db),
       getAllPlans(db),
-      getBackupStatus(db),
-      getBackupDataHealth(db),
     ]);
-    setProfile(nextProfile);
+    if (!profileDirty.current) setProfile(nextProfile);
+    setLoadError('');
     setPlans(nextPlans);
-    setBackupStatus(nextBackupStatus);
-    setBackupDataHealth(nextBackupDataHealth);
   }, [db]);
 
   useFocusEffect(useCallback(() => {
-    load();
-  }, [load]));
+    void revision;
+    load().catch((error) => setLoadError(error instanceof Error ? error.message : 'Please try again.'));
+  }, [load, revision]));
 
   const updateProfile = (key: keyof GymProfile, value: string) => {
+    profileDirty.current = true;
     setProfile((current) => ({ ...(current ?? EMPTY_PROFILE), [key]: value }));
   };
 
   const saveProfile = async () => {
+    if (profileSavingRef.current) return;
     if (!profile?.gymName.trim()) {
       Alert.alert('Gym name required', 'Enter the gym name before saving.');
       return;
     }
+    profileSavingRef.current = true;
     setSaving(true);
     try {
       await saveGymProfile(db, profile);
+      profileDirty.current = false;
       refreshData();
       Alert.alert('Saved', 'Gym profile updated.');
     } catch (error) {
       Alert.alert('Could not save', error instanceof Error ? error.message : 'Please try again.');
     } finally {
+      profileSavingRef.current = false;
       setSaving(false);
     }
   };
@@ -96,6 +89,8 @@ export default function SettingsScreen() {
   };
 
   const savePlan = async () => {
+    if (planSavingRef.current) return;
+    planSavingRef.current = true;
     const duration = Number(planDuration);
     const amount = Number(planPrice.replace(/,/g, ''));
     setPlanSaving(true);
@@ -115,6 +110,7 @@ export default function SettingsScreen() {
     } catch (error) {
       Alert.alert('Could not save plan', error instanceof Error ? error.message : 'Please check the plan details.');
     } finally {
+      planSavingRef.current = false;
       setPlanSaving(false);
     }
   };
@@ -145,149 +141,37 @@ export default function SettingsScreen() {
     );
   };
 
-  const discardPreparedBackup = (prepared: PreparedBackup) => {
-    try {
-      if (prepared.file.exists) prepared.file.delete();
-    } catch {
-      // Cache cleanup should not hide a completed save, share, or cancellation.
-    }
-  };
-
-  const saveBackupToFolder = async (prepared: PreparedBackup) => {
-    let savedToFolder = false;
-    try {
-      await savePreparedBackup(prepared);
-      savedToFolder = true;
-      await saveBackupStatus(db, prepared.archive.exportedAt, prepared.filename);
-      setBackupStatus({ exportedAt: prepared.archive.exportedAt, filename: prepared.filename });
-      Alert.alert(
-        'Backup saved',
-        `${prepared.filename}\n\n${formatBackupCounts(prepared.summary)}`,
-      );
-    } catch (error) {
-      if (savedToFolder) {
-        Alert.alert(
-          'Backup saved',
-          `${prepared.filename}\n\n${formatBackupCounts(prepared.summary)}\n\nThe file was saved, but its backup history could not be updated.`,
-        );
-        return;
-      }
-      Alert.alert(
-        isPickerCancellation(error) ? 'Folder save cancelled' : 'Backup failed',
-        isPickerCancellation(error)
-          ? 'The backup was not saved to a folder.'
-          : error instanceof Error ? error.message : 'Please try again.',
-      );
-    } finally {
-      discardPreparedBackup(prepared);
-      setBackupBusy(false);
-    }
-  };
-
-  const shareBackup = async (prepared: PreparedBackup) => {
-    try {
-      await sharePreparedBackup(prepared);
-      Alert.alert(
-        'Share sheet completed',
-        `${prepared.filename} was sent to the share sheet. Confirm the destination app completed its save.`,
-      );
-    } catch (error) {
-      Alert.alert('Backup failed', error instanceof Error ? error.message : 'Please try again.');
-    } finally {
-      discardPreparedBackup(prepared);
-      setBackupBusy(false);
-    }
-  };
-
-  const exportData = async () => {
-    setBackupBusy(true);
-    try {
-      const prepared = await prepareBackup(db);
-      const legacyPhoneNote = backupDataHealth.duplicatePhoneGroups > 0
-        ? `\n\nAll ${backupDataHealth.duplicatePhoneMembers} profiles with shared legacy phone numbers are included safely.`
-        : '';
-      Alert.alert(
-        'Backup ready',
-        `Save to a folder for a verified local copy, or open the share sheet to send the file to another app.${legacyPhoneNote}`,
-        [
-          {
-            text: 'Cancel',
-            style: 'cancel',
-            onPress: () => {
-              discardPreparedBackup(prepared);
-              setBackupBusy(false);
-            },
-          },
-          { text: 'Save to folder', onPress: () => { void saveBackupToFolder(prepared); } },
-          { text: 'Share / Drive', onPress: () => { void shareBackup(prepared); } },
-        ],
-        { cancelable: false },
-      );
-    } catch (error) {
-      Alert.alert('Backup failed', error instanceof Error ? error.message : 'Please try again.');
-      setBackupBusy(false);
-    }
-  };
-
-  const confirmRestore = () => {
-    Alert.alert(
-      'Restore a backup?',
-      'This replaces all current members, plans, payments, attendance, expenses, and settings on this device.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Choose backup',
-          style: 'destructive',
-          onPress: async () => {
-            setBackupBusy(true);
-            try {
-              const restored = await restoreBackup(db);
-              if (restored) {
-                refreshData();
-                await load();
-                const skippedPhotos = restored.skippedPhotos
-                  ? `\n\n${restored.skippedPhotos} profile photo${restored.skippedPhotos === 1 ? '' : 's'} could not be restored.`
-                  : '';
-                Alert.alert(
-                  'Backup restored',
-                  `Backup created ${formatBackupDate(restored.exportedAt)}.\n\n${formatBackupCounts(restored.summary)}${skippedPhotos}`,
-                );
-              }
-            } catch (error) {
-              Alert.alert('Restore failed', error instanceof Error ? error.message : 'Please choose a valid backup.');
-            } finally {
-              setBackupBusy(false);
-            }
-          },
-        },
-      ],
-    );
-  };
-
+  if (loadError && !profile) return <Screen><Text selectable>{loadError}</Text><PrimaryButton label="Try again" onPress={() => { void load().catch((error) => setLoadError(String(error))); }} /></Screen>;
   if (!profile) return <Screen><LoadingView /></Screen>;
 
   return (
     <Screen>
-      <TopBar eyebrow="Local-first administration" title="Your gym" subtitle="Profile, plans, and secure backups" />
+      <TopBar eyebrow="Make it yours" title="Your gym" subtitle="Your details, your plans, your prices" />
 
       <Section title="Gym profile" subtitle="Used throughout the app and on invoices">
-        <FormField label="Gym name" icon="business-outline" value={profile.gymName} onChangeText={(value) => updateProfile('gymName', value)} />
-        <FormField label="Owner / manager" icon="person-outline" value={profile.ownerName} onChangeText={(value) => updateProfile('ownerName', value)} />
-        <FormField label="Phone" icon="call-outline" value={profile.phone} keyboardType="phone-pad" onChangeText={(value) => updateProfile('phone', value)} />
-        <FormField label="Email" icon="mail-outline" value={profile.email} keyboardType="email-address" autoCapitalize="none" onChangeText={(value) => updateProfile('email', value)} />
-        <FormField label="Address" icon="location-outline" value={profile.address} multiline onChangeText={(value) => updateProfile('address', value)} />
+        <FormField editable={!saving} label="Gym name" icon="business-outline" value={profile.gymName} onChangeText={(value) => updateProfile('gymName', value)} />
+        <FormField editable={!saving} label="Owner / manager" icon="person-outline" value={profile.ownerName} onChangeText={(value) => updateProfile('ownerName', value)} />
+        <FormField editable={!saving} label="Phone" icon="call-outline" value={profile.phone} keyboardType="phone-pad" onChangeText={(value) => updateProfile('phone', value)} />
+        <FormField editable={!saving} label="Email" icon="mail-outline" value={profile.email} keyboardType="email-address" autoCapitalize="none" onChangeText={(value) => updateProfile('email', value)} />
+        <FormField editable={!saving} label="Address" icon="location-outline" value={profile.address} multiline onChangeText={(value) => updateProfile('address', value)} />
         <PrimaryButton label="Save gym profile" icon="checkmark" loading={saving} onPress={saveProfile} />
       </Section>
 
       <Section
         title="Membership plans"
-        subtitle="Create, edit, or retire plans without changing old invoices"
+        subtitle="Choose any name, number of months and price. Changes apply to future memberships."
         action={
           <Pressable onPress={() => openPlanEditor()} style={styles.addPlanButton}>
             <Ionicons name="add" size={18} color={palette.white} />
             <Text style={styles.addPlanText}>Add plan</Text>
           </Pressable>
         }>
+        {plans.length === 0 && (
+          <EmptyState icon="barbell-outline" title="Add your first plan" message="You decide what your gym offers. Create a plan with your own name, duration and price." action={<PrimaryButton label="Create my first plan" icon="add" onPress={() => openPlanEditor()} />} />
+        )}
+        {plans.length > 0 && !plans.some((plan) => plan.active) && (
+          <Text style={styles.setupHint}>All plans are inactive. Reactivate a plan or create one before adding a membership.</Text>
+        )}
         {plans.map((plan) => (
           <View key={plan.id} style={[styles.planRow, plan.active === 0 && styles.inactivePlan]}>
             <View style={[styles.planIcon, plan.active === 0 && styles.inactiveIcon]}>
@@ -308,49 +192,29 @@ export default function SettingsScreen() {
         ))}
       </Section>
 
-      <Section title="Backup & restore" subtitle="Your records stay on this device unless you export them">
-        <View style={styles.backupNotice}>
-          <Ionicons name="shield-checkmark" size={24} color={palette.emeraldDark} />
-          <Text style={styles.backupNoticeText}>Backups include members, plans, payments, attendance, expenses, and gym profile data.</Text>
-        </View>
-        {backupDataHealth.duplicatePhoneGroups > 0 && (
-          <View style={styles.backupHealthNotice}>
-            <Ionicons name="information-circle" size={22} color={palette.amber} />
-            <View style={styles.backupHealthCopy}>
-              <Text style={styles.backupHealthTitle}>Legacy shared phone numbers</Text>
-              <Text style={styles.backupHealthText}>
-                {backupDataHealth.duplicatePhoneMembers} profiles share {backupDataHealth.duplicatePhoneGroups} phone {backupDataHealth.duplicatePhoneGroups === 1 ? 'number' : 'numbers'}. Backups preserve every profile; new duplicates remain blocked.
-              </Text>
-            </View>
-          </View>
-        )}
-        {backupStatus.exportedAt ? (
-          <View style={styles.backupStatus}>
-            <Text style={styles.backupStatusTitle}>Last successful backup: {formatBackupDate(backupStatus.exportedAt)}</Text>
-            <Text style={styles.backupStatusFile}>{backupStatus.filename}</Text>
-          </View>
-        ) : (
-          <Text style={styles.backupStatusEmpty}>No verified folder backup has been saved yet.</Text>
-        )}
-        <ActionRow icon="cloud-upload-outline" title="Export backup" meta="Create a verified JSON backup, then save or share it" onPress={exportData} disabled={backupBusy} />
-        <ActionRow icon="cloud-download-outline" title="Restore from backup" meta="Import a JSON backup from device storage" onPress={confirmRestore} disabled={backupBusy} />
+      <Section title="Import your members" subtitle="Bring an existing list from a CSV spreadsheet">
+        <Text style={styles.setupHint}>Create your plans first, then preview the member list and opening balances before importing.</Text>
+        <PrimaryButton label="Import member list" icon="people-outline" variant="secondary" disabled={!plans.some((plan) => plan.active)} onPress={() => router.push('/import-members')} />
       </Section>
+
+      <BackupSettings onRestored={async () => { profileDirty.current = false; await load(); }} />
 
       <View style={styles.localBadge}>
         <Ionicons name="phone-portrait-outline" size={18} color={palette.emeraldDark} />
         <Text style={styles.localBadgeText}>Private by default · Local SQLite storage</Text>
       </View>
 
-      <Modal animationType="fade" transparent visible={planEditorOpen} onRequestClose={() => setPlanEditorOpen(false)}>
+      <Modal animationType="fade" transparent visible={planEditorOpen} onRequestClose={() => { if (!planSaving) setPlanEditorOpen(false); }}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalBackdrop}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setPlanEditorOpen(false)} />
+          <Pressable style={StyleSheet.absoluteFill} disabled={planSaving} onPress={() => setPlanEditorOpen(false)} />
           <View style={styles.modalCard}>
+            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
             <View style={styles.modalHeader}>
               <View>
                 <Text style={styles.modalEyebrow}>{editingPlan ? 'Edit membership plan' : 'New membership plan'}</Text>
                 <Text style={styles.modalTitle}>{editingPlan?.name ?? 'Create a plan'}</Text>
               </View>
-              <Pressable onPress={() => setPlanEditorOpen(false)} style={styles.modalClose}>
+              <Pressable disabled={planSaving} onPress={() => setPlanEditorOpen(false)} style={styles.modalClose}>
                 <Ionicons name="close" size={21} color={palette.inkSoft} />
               </Pressable>
             </View>
@@ -358,34 +222,11 @@ export default function SettingsScreen() {
             <FormField label="Duration in months" icon="calendar-outline" value={planDuration} onChangeText={setPlanDuration} keyboardType="number-pad" placeholder="3" />
             <FormField label="Price in rupees" icon="cash-outline" value={planPrice} onChangeText={setPlanPrice} keyboardType="numeric" placeholder="1600" />
             <PrimaryButton label={editingPlan ? 'Save plan changes' : 'Create membership plan'} icon="checkmark" loading={planSaving} onPress={savePlan} />
+            </ScrollView>
           </View>
         </KeyboardAvoidingView>
       </Modal>
     </Screen>
-  );
-}
-
-function formatBackupDate(exportedAt: string) {
-  const date = new Date(exportedAt);
-  if (Number.isNaN(date.getTime())) return exportedAt;
-  return date.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
-}
-
-function formatBackupCounts(summary: { members: number; payments: number; attendance: number }) {
-  return `${summary.members} member${summary.members === 1 ? '' : 's'}\n${summary.payments} payment${summary.payments === 1 ? '' : 's'}\n${summary.attendance} attendance record${summary.attendance === 1 ? '' : 's'}`;
-}
-
-function isPickerCancellation(error: unknown) {
-  return error instanceof Error && /pick(?:er|ing).*cancelled/i.test(error.message);
-}
-
-function ActionRow({ icon, title, meta, onPress, disabled }: { icon: keyof typeof Ionicons.glyphMap; title: string; meta: string; onPress: () => void; disabled: boolean }) {
-  return (
-    <Pressable onPress={onPress} disabled={disabled} style={styles.actionRow}>
-      <View style={styles.actionIcon}><Ionicons name={icon} size={22} color={palette.emeraldDark} /></View>
-      <View style={styles.actionCopy}><Text style={styles.actionTitle}>{title}</Text><Text style={styles.actionMeta}>{meta}</Text></View>
-      <Ionicons name="chevron-forward" size={20} color={palette.muted} />
-    </Pressable>
   );
 }
 
@@ -402,25 +243,11 @@ const styles = StyleSheet.create({
   planAmount: { color: palette.ink, fontSize: 13, fontWeight: '900' },
   iconButton: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.emeraldSoft },
   reactivateButton: { backgroundColor: palette.blueSoft },
-  backupNotice: { flexDirection: 'row', gap: 11, padding: 14, borderRadius: radii.md, backgroundColor: palette.emeraldSoft, marginBottom: 8 },
-  backupNoticeText: { flex: 1, color: palette.emeraldDark, fontSize: 12, lineHeight: 18, fontWeight: '600' },
-  backupHealthNotice: { flexDirection: 'row', gap: 10, padding: 13, borderRadius: radii.md, backgroundColor: palette.amberSoft, marginBottom: 8 },
-  backupHealthCopy: { flex: 1 },
-  backupHealthTitle: { color: palette.ink, fontSize: 12, fontWeight: '800' },
-  backupHealthText: { color: palette.inkSoft, fontSize: 11, lineHeight: 17, marginTop: 3 },
-  backupStatus: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: palette.line },
-  backupStatusTitle: { color: palette.ink, fontSize: 12, fontWeight: '800' },
-  backupStatusFile: { color: palette.muted, fontSize: 11, lineHeight: 16, marginTop: 3 },
-  backupStatusEmpty: { color: palette.muted, fontSize: 11, lineHeight: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: palette.line },
-  actionRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: palette.line },
-  actionIcon: { width: 44, height: 44, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.emeraldSoft },
-  actionCopy: { flex: 1 },
-  actionTitle: { color: palette.ink, fontSize: 14, fontWeight: '800' },
-  actionMeta: { color: palette.muted, fontSize: 11, lineHeight: 16, marginTop: 3 },
+  setupHint: { color: palette.muted, fontSize: 13, lineHeight: 20, marginBottom: 14 },
   localBadge: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 7, paddingVertical: 10 },
   localBadgeText: { color: palette.emeraldDark, fontSize: 12, fontWeight: '700' },
   modalBackdrop: { flex: 1, justifyContent: 'center', paddingHorizontal: 22, backgroundColor: 'rgba(11,19,32,0.58)' },
-  modalCard: { backgroundColor: palette.card, borderRadius: radii.xl, padding: 20 },
+  modalCard: { maxHeight: '90%', backgroundColor: palette.card, borderRadius: radii.xl, padding: 20 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 },
   modalEyebrow: { color: palette.emeraldDark, fontSize: 11, fontWeight: '800', letterSpacing: 1, textTransform: 'uppercase' },
   modalTitle: { color: palette.ink, fontSize: 23, fontWeight: '900', marginTop: 5 },

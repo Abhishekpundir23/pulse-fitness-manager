@@ -2,7 +2,8 @@ export function formatCurrency(value: number) {
   return new Intl.NumberFormat('en-IN', {
     style: 'currency',
     currency: 'INR',
-    maximumFractionDigits: 0,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
   }).format(Number.isFinite(value) ? value : 0);
 }
 
@@ -54,4 +55,3 @@ export function daysUntil(value?: string | null) {
   const target = new Date(`${value}T00:00:00`).getTime();
   return Math.ceil((target - today) / 86_400_000);
 }
-

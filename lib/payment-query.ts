@@ -6,6 +6,7 @@ export function buildPaymentHistoryQuery(filters: PaymentHistoryFilters) {
   const clauses = [
     '(m.name LIKE ? OR m.phone LIKE ? OR m.membership_id LIKE ?)',
   ];
+  if (!filters.includeVoided) clauses.push('p.voided_at IS NULL');
   const args: (string | number)[] = [search, search, search];
 
   if (filters.method !== 'all') {

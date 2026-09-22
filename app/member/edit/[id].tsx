@@ -2,13 +2,14 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { Avatar, Chip, DateField, FormField, LoadingView, PrimaryButton, Screen, Section } from '@/components/ui-kit';
+import { Avatar, Chip, DateField, EmptyState, FormField, LoadingView, PrimaryButton, Screen, Section } from '@/components/ui-kit';
 import { useAppData } from '@/contexts/app-data';
 import { getMemberDetail, updateMemberProfile } from '@/lib/database';
 import { persistMemberPhoto } from '@/lib/member-photo';
+import { normalizeMemberPhone } from '@/lib/member-phone';
 import { palette, radii } from '@/lib/theme';
 import type { Gender } from '@/lib/types';
 
@@ -19,6 +20,7 @@ export default function EditMemberScreen() {
   const { refreshData } = useAppData();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const [name, setName] = useState('');
   const [gender, setGender] = useState<Gender>('Male');
   const [phone, setPhone] = useState('');
@@ -28,13 +30,12 @@ export default function EditMemberScreen() {
   const [notes, setNotes] = useState('');
   const [photoUri, setPhotoUri] = useState('');
   const [joinedAt, setJoinedAt] = useState('');
+  const [loadError, setLoadError] = useState('');
 
   useEffect(() => {
     getMemberDetail(db, memberId).then((member) => {
       if (!member) {
-        Alert.alert('Member not found', 'This profile is no longer available.', [
-          { text: 'Go back', onPress: () => router.back() },
-        ]);
+        setLoadError('This profile is no longer available.');
         return;
       }
       setName(member.name);
@@ -46,8 +47,9 @@ export default function EditMemberScreen() {
       setNotes(member.notes ?? '');
       setPhotoUri(member.photo_uri ?? '');
       setJoinedAt(member.joined_at);
-      setLoading(false);
-    });
+    }).catch((error: unknown) => {
+      setLoadError(error instanceof Error ? error.message : 'Please try again.');
+    }).finally(() => setLoading(false));
   }, [db, memberId]);
 
   const pickPhoto = async () => {
@@ -87,17 +89,15 @@ export default function EditMemberScreen() {
   };
 
   const save = async () => {
-    const cleanPhone = phone.replace(/\D/g, '');
+    if (savingRef.current) return;
     if (!name.trim()) {
       Alert.alert('Name required', 'Enter the member’s full name.');
       return;
     }
-    if (cleanPhone.length < 10) {
-      Alert.alert('Valid phone required', 'Enter a valid 10-digit mobile number.');
-      return;
-    }
+    savingRef.current = true;
     setSaving(true);
     try {
+      const cleanPhone = normalizeMemberPhone(phone);
       await updateMemberProfile(db, memberId, {
         name,
         gender,
@@ -114,11 +114,13 @@ export default function EditMemberScreen() {
     } catch (error) {
       Alert.alert('Could not update member', error instanceof Error ? error.message : 'Please try again.');
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
 
   if (loading) return <Screen><LoadingView /></Screen>;
+  if (loadError) return <Screen><EmptyState icon="person-outline" title="Could not load profile" message={loadError} /></Screen>;
 
   return (
     <Screen>
@@ -139,7 +141,7 @@ export default function EditMemberScreen() {
         </View>
       </View>
 
-      <Section title="Edit member profile" subtitle="For first-time memberships, join date also adjusts the current plan dates">
+      <Section title="Edit member profile" subtitle="Profile changes do not change membership dates or charges">
         <FormField label="Full name *" icon="person-outline" value={name} onChangeText={setName} autoCapitalize="words" />
         <Text style={styles.groupLabel}>Gender</Text>
         <View style={styles.chipRow}>
@@ -149,7 +151,7 @@ export default function EditMemberScreen() {
         </View>
         <FormField label="Mobile number *" icon="call-outline" value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
         <FormField label="Email" icon="mail-outline" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
-        <DateField label="Join date" value={joinedAt} onChange={setJoinedAt} />
+        <DateField label="Profile join date" value={joinedAt} onChange={setJoinedAt} />
         <FormField label="Date of birth" icon="gift-outline" value={dateOfBirth} onChangeText={setDateOfBirth} placeholder="YYYY-MM-DD (optional)" />
         <FormField label="Address" icon="location-outline" value={address} onChangeText={setAddress} multiline />
         <FormField label="Notes" icon="document-text-outline" value={notes} onChangeText={setNotes} multiline />

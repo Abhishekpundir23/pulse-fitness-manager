@@ -1,6 +1,8 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
+import { PlanRequired } from '@/components/plan-required';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Chip, DateField, FormField, LoadingView, PrimaryButton, Screen, Section } from '@/components/ui-kit';
@@ -23,20 +25,25 @@ export default function NewMembershipScreen() {
   const [discount, setDiscount] = useState('');
   const [admissionFee, setAdmissionFee] = useState('');
   const [initialPayment, setInitialPayment] = useState('');
+  const [paymentDate, setPaymentDate] = useState(todayIso());
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Cash');
+  const savingRef = useRef(false);
+  const [loadError, setLoadError] = useState('');
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
+    let active = true;
     Promise.all([getMemberDetail(db, memberId), getPlans(db)]).then(([nextMember, nextPlans]) => {
+      if (!active) return;
+      setLoadError(nextMember ? '' : 'Member not found.');
       setMember(nextMember);
       setPlans(nextPlans);
-      setPlanId(
-        changingCurrent && nextMember?.plan_id
-          ? nextMember.plan_id
-          : nextPlans[0]?.id ?? null,
-      );
-    });
-  }, [changingCurrent, db, memberId]);
+      setPlanId((current) => nextPlans.some((plan) => plan.id === current) ? current
+        : changingCurrent && nextPlans.some((plan) => plan.id === nextMember?.plan_id)
+          ? nextMember!.plan_id : nextPlans[0]?.id ?? null);
+    }).catch((error) => { if (active) setLoadError(error instanceof Error ? error.message : 'Could not load membership.'); });
+    return () => { active = false; };
+  }, [changingCurrent, db, memberId]));
 
   const selectedPlan = plans?.find((plan) => plan.id === planId);
   const total = useMemo(
@@ -59,6 +66,7 @@ export default function NewMembershipScreen() {
     : null;
 
   const save = async () => {
+    if (savingRef.current) return;
     if (!planId) {
       Alert.alert('Plan required', 'Choose a membership plan.');
       return;
@@ -71,6 +79,7 @@ export default function NewMembershipScreen() {
       Alert.alert('Payment is too high', 'Opening payment cannot exceed the final plan amount.');
       return;
     }
+    savingRef.current = true;
     setSaving(true);
     try {
       if (changingCurrent) {
@@ -80,10 +89,11 @@ export default function NewMembershipScreen() {
           memberId,
           planId,
           joiningDate,
-          discountAmount: Number(discount) || 0,
-          admissionFee: Number(admissionFee) || 0,
-          initialPayment: Number(initialPayment) || 0,
+          discountAmount: Number(discount),
+          admissionFee: Number(admissionFee),
+          initialPayment: Number(initialPayment),
           paymentMethod,
+          paymentDate,
         });
       }
       refreshData();
@@ -94,10 +104,13 @@ export default function NewMembershipScreen() {
         error instanceof Error ? error.message : 'Please try again.',
       );
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
 
+  if (loadError) return <Screen><Text selectable>{loadError}</Text><PrimaryButton label="Go back" onPress={() => router.back()} /></Screen>;
+  if (plans?.length === 0) return <Screen><PlanRequired /></Screen>;
   if (!member || !plans) return <Screen><LoadingView /></Screen>;
 
   return (
@@ -164,6 +177,7 @@ export default function NewMembershipScreen() {
       ) : (
       <Section title="Opening payment" subtitle="Record any amount received with the new plan">
         <FormField label="Amount received" icon="cash-outline" value={initialPayment} onChangeText={setInitialPayment} keyboardType="numeric" placeholder="₹0" />
+        <DateField label="Opening payment date" value={paymentDate} onChange={setPaymentDate} maximumDate={new Date()} />
         <Text style={styles.groupLabel}>Payment method</Text>
         <View style={styles.chipRow}>
           {(['Cash', 'UPI', 'Card', 'Bank transfer'] as PaymentMethod[]).map((item) => (

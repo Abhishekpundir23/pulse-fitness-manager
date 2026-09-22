@@ -2,7 +2,9 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { router } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
+import { PlanRequired } from '@/components/plan-required';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import {
@@ -18,6 +20,7 @@ import {
 import { useAppData } from '@/contexts/app-data';
 import { createMember, getPlans } from '@/lib/database';
 import { formatCurrency, todayIso } from '@/lib/format';
+import { normalizeMemberPhone } from '@/lib/member-phone';
 import { persistMemberPhoto } from '@/lib/member-photo';
 import { palette, radii } from '@/lib/theme';
 import type { Gender, PaymentMethod, Plan } from '@/lib/types';
@@ -26,6 +29,8 @@ export default function NewMemberScreen() {
   const db = useSQLiteContext();
   const { refreshData } = useAppData();
   const [plans, setPlans] = useState<Plan[] | null>(null);
+  const savingRef = useRef(false);
+  const [loadError, setLoadError] = useState('');
   const [saving, setSaving] = useState(false);
   const [name, setName] = useState('');
   const [gender, setGender] = useState<Gender>('Male');
@@ -40,14 +45,19 @@ export default function NewMemberScreen() {
   const [discount, setDiscount] = useState('');
   const [admissionFee, setAdmissionFee] = useState('');
   const [initialPayment, setInitialPayment] = useState('');
+  const [paymentDate, setPaymentDate] = useState(todayIso());
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Cash');
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
+    let active = true;
     getPlans(db).then((rows) => {
+      if (!active) return;
+      setLoadError('');
       setPlans(rows);
-      setPlanId(rows[0]?.id ?? null);
-    });
-  }, [db]);
+      setPlanId((current) => rows.some((plan) => plan.id === current) ? current : rows[0]?.id ?? null);
+    }).catch((error) => { if (active) setLoadError(error instanceof Error ? error.message : 'Could not load plans.'); });
+    return () => { active = false; };
+  }, [db]));
 
   const selectedPlan = plans?.find((plan) => plan.id === planId);
   const total = useMemo(() => {
@@ -98,13 +108,12 @@ export default function NewMemberScreen() {
   };
 
   const save = async () => {
-    const cleanPhone = phone.replace(/\D/g, '');
+    if (savingRef.current) return;
+    let cleanPhone: string;
+    try { cleanPhone = normalizeMemberPhone(phone); }
+    catch (error) { Alert.alert('Valid phone required', error instanceof Error ? error.message : 'Enter a valid Indian mobile number.'); return; }
     if (!name.trim()) {
       Alert.alert('Name required', 'Enter the member’s full name.');
-      return;
-    }
-    if (cleanPhone.length < 10) {
-      Alert.alert('Valid phone required', 'Enter a valid 10-digit mobile number.');
       return;
     }
     if (!planId) {
@@ -116,6 +125,7 @@ export default function NewMemberScreen() {
       return;
     }
 
+    savingRef.current = true;
     setSaving(true);
     try {
       const memberId = await createMember(db, {
@@ -129,20 +139,24 @@ export default function NewMemberScreen() {
         photoUri: persistMemberPhoto(photoUri),
         planId,
         joiningDate,
-        discountAmount: Number(discount) || 0,
-        admissionFee: Number(admissionFee) || 0,
-        initialPayment: Number(initialPayment) || 0,
+        discountAmount: Number(discount),
+        admissionFee: Number(admissionFee),
+        initialPayment: Number(initialPayment),
         paymentMethod,
+        paymentDate,
       });
       refreshData();
       router.replace(`/member/${memberId}`);
     } catch (error) {
       Alert.alert('Could not add member', error instanceof Error ? error.message : 'Please try again.');
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
 
+  if (loadError) return <Screen><Text selectable>{loadError}</Text><PrimaryButton label="Go back" onPress={() => router.back()} /></Screen>;
+  if (plans?.length === 0) return <Screen><PlanRequired /></Screen>;
   if (!plans) return <Screen><LoadingView /></Screen>;
 
   return (
@@ -210,6 +224,7 @@ export default function NewMemberScreen() {
 
       <Section title="Opening payment" subtitle="You can leave this at zero and collect later">
         <FormField label="Amount received" icon="cash-outline" value={initialPayment} onChangeText={setInitialPayment} keyboardType="numeric" placeholder="₹0" />
+        <DateField label="Opening payment date" value={paymentDate} onChange={setPaymentDate} maximumDate={new Date()} />
         <Text style={styles.groupLabel}>Payment method</Text>
         <View style={styles.chipRow}>
           {(['Cash', 'UPI', 'Card', 'Bank transfer'] as PaymentMethod[]).map((item) => (

@@ -42,7 +42,7 @@ const FILTER_COPY: Record<MemberFilter, { found: string; emptyTitle: string; emp
   paid: {
     found: 'fully paid members',
     emptyTitle: 'No fully paid members',
-    emptyMessage: 'Members will appear here once their active plan balance is zero.',
+    emptyMessage: 'Members appear here when they have no outstanding membership balance.',
   },
   expired: {
     found: 'expired members',
