@@ -15,6 +15,7 @@ export type BackupPreview = {
   gymName: string;
   exportedAt: string;
   counts: BackupSummary & { memberships: number; expenses: number; plans: number; photos: number };
+  missingPhotos: number;
 };
 
 export type SafeRestoreResult = {
@@ -36,7 +37,15 @@ export function previewArchive(archive: BackupArchive): BackupPreview {
       plans: archive.data.plans.length,
       photos: Object.keys(archive.memberPhotos ?? {}).length,
     },
+    missingPhotos: getMissingBackupPhotos(archive),
   };
+}
+
+export function getMissingBackupPhotos(archive: BackupArchive): number {
+  // Old installations can retain a path after its photo has disappeared. Keep
+  // those records exportable, but never mistake a path for backed-up photo bytes.
+  return archive.data.members.filter((member) => member.photo_uri
+    && !archive.memberPhotos?.[String(member.id)]).length;
 }
 
 export function verifyArchiveCopy(serialized: string, expected: BackupArchive): BackupArchive {
@@ -82,15 +91,15 @@ export async function runRestoreWithRecovery(
       : detail);
   }
   if (!recovery) throw new Error('Restore did not create its required recovery copy.');
-  let skippedPhotos = 0;
-  let photoWarning = false;
+  let skippedPhotos = getMissingBackupPhotos(selected);
+  let photoWarning = skippedPhotos > 0;
   try {
-    skippedPhotos = await operations.restorePhotos(selected);
+    skippedPhotos += await operations.restorePhotos(selected);
     photoWarning = skippedPhotos > 0;
   } catch {
     // Row replacement is already committed. A photo failure must not look like a
     // failed database restore or encourage an accidental second replacement.
-    skippedPhotos = Object.keys(selected.memberPhotos ?? {}).length;
+    skippedPhotos += Object.keys(selected.memberPhotos ?? {}).length;
     photoWarning = true;
   }
   return { exportedAt: selected.exportedAt, summary: summarizeBackup(selected), recovery, skippedPhotos, photoWarning };

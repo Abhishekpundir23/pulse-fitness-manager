@@ -108,8 +108,18 @@ export async function savePreparedBackup(prepared: PreparedBackup): Promise<stri
   const directory = await Directory.pickDirectoryAsync();
   const serialized = serializeBackup(prepared.archive);
   const destination = directory.createFile(prepared.filename, 'application/json');
-  destination.write(serialized);
-  verifyArchiveCopy(await destination.text(), prepared.archive);
+  try {
+    destination.write(serialized);
+    verifyArchiveCopy(await destination.text(), prepared.archive);
+  } catch (error) {
+    try {
+      destination.delete();
+    } catch {
+      // A provider may revoke access or go offline. Keep the original failure
+      // visible even when its incomplete destination cannot be removed.
+    }
+    throw error;
+  }
   return destination.uri;
 }
 
@@ -118,7 +128,15 @@ export async function sharePreparedBackup(prepared: PreparedBackup): Promise<voi
     throw new Error('File sharing is unavailable on this device.');
   }
   verifyArchiveCopy(await prepared.file.text(), prepared.archive);
-  await Sharing.shareAsync(prepared.file.uri, {
+  // Android resolves when the chooser returns, before the receiving app is
+  // guaranteed to read the FileProvider URI. Give it a separate cache copy that
+  // survives the caller discarding the prepared file. The OS manages this cache.
+  const directory = new Directory(Paths.cache, 'backup-share');
+  if (!directory.exists) directory.create({ idempotent: true, intermediates: true });
+  const sharedFile = new File(directory, `${Date.now()}-${Math.random().toString(36).slice(2, 10)}-${prepared.filename}`);
+  prepared.file.copy(sharedFile);
+  verifyArchiveCopy(await sharedFile.text(), prepared.archive);
+  await Sharing.shareAsync(sharedFile.uri, {
     mimeType: 'application/json',
     dialogTitle: 'Share gym backup',
   });

@@ -11,7 +11,7 @@ import {
   savePreparedBackup, sharePreparedBackup, shareRecoveryBackup,
   type PreparedBackup, type PreparedRestore, type RecoveryEntry,
 } from '@/lib/backup';
-import { getBackupAgeReminder } from '@/lib/backup-safety';
+import { getBackupAgeReminder, getMissingBackupPhotos } from '@/lib/backup-safety';
 import { getBackupDataHealth, getBackupStatus, saveBackupStatus, type BackupDataHealth, type BackupStatus } from '@/lib/database';
 import { palette, radii } from '@/lib/theme';
 
@@ -84,7 +84,8 @@ function NativeBackupSettings({ onRestored }: { onRestored?: () => void | Promis
     if (!begin()) return;
     try {
       const prepared = await prepareBackup(db);
-      Alert.alert('Backup ready', `${prepared.summary.members} members · ${prepared.summary.payments} payments\n\nChoose a folder for a verified saved copy, or share the file to another app.`, [
+      const missingPhotos = getMissingBackupPhotos(prepared.archive);
+      Alert.alert('Backup ready', `${prepared.summary.members} members · ${prepared.summary.payments} payments${missingPhotos ? `\n\n${missingPhotos} profile photo(s) could not be found or read on this phone and are not included. The member and payment records are included.` : ''}\n\nChoose a folder for a verified saved copy, or share the file to another app.`, [
         { text: 'Cancel', style: 'cancel', onPress: () => { discard(prepared); finish(); } },
         { text: 'Save to folder', onPress: () => { void deliver(prepared, 'folder'); } },
         { text: 'Share file', onPress: () => { void deliver(prepared, 'share'); } },
@@ -139,7 +140,7 @@ function NativeBackupSettings({ onRestored }: { onRestored?: () => void | Promis
     <Section title="Backup & restore" subtitle="Keep a safe copy of your gym records">
       <View style={styles.notice}>
         <Ionicons name="shield-checkmark-outline" size={24} color={palette.emeraldDark} />
-        <Text style={styles.noticeText}>Includes members, memberships, payments, attendance, expenses, plans, photos and gym details.</Text>
+        <Text style={styles.noticeText}>Includes members, memberships, payments, attendance, expenses, plans, available profile photos and gym details.</Text>
       </View>
       {loading ? <ActivityIndicator accessibilityLabel="Loading backup status" color={palette.emeraldDark} style={styles.loading} /> : loadError ? (
         <View style={styles.warning}>
@@ -182,6 +183,7 @@ function NativeBackupSettings({ onRestored }: { onRestored?: () => void | Promis
               <Text style={styles.body}>Created {pending && formatDate(pending.preview.exportedAt)}</Text>
               <Text style={styles.meta}>{pending?.filename}</Text>
               {pending && <View style={styles.counts}>{Object.entries(pending.preview.counts).map(([label, count]) => <View key={label} style={styles.countRow}><Text style={styles.body}>{label === 'photos' ? 'Profile photos' : label.charAt(0).toUpperCase() + label.slice(1)}</Text><Text style={styles.title}>{count}</Text></View>)}</View>}
+              {!!pending?.preview.missingPhotos && <Text style={styles.body}>{pending.preview.missingPhotos} profile photo(s) were not included in this backup and cannot be restored. Their member records are included.</Text>}
               <View style={styles.warning}>
                 <Text style={styles.title}>This replaces all current gym records on this phone.</Text>
                 <Text style={styles.body}>A verified recovery copy of the current records will be saved first. You can restore or share it afterwards. No records change until you confirm below.</Text>

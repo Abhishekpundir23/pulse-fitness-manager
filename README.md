@@ -19,7 +19,7 @@ A modern, local-first Android app for managing gym members, membership plans, pa
 - Live collection, dues, expiry, and attendance dashboards
 - Shareable PDF membership invoices
 - Local SQLite storage with no required backend
-- Verified JSON backup and restore through a selected device folder or Android share sheet, including profile photos
+- Verified JSON folder backups, Android file sharing and restore, including available profile photos
 - Custom gym profile, branding, and Android launcher icon
 - First-run setup with no preset membership plans or prices
 - CSV member import with a complete preview, row validation and atomic saving
@@ -88,7 +88,9 @@ npx eas-cli build --platform android --profile preview
 
 All operational data is stored locally in SQLite on one owner's phone. The **Gym** tab prepares and verifies a versioned JSON archive before it can be saved to a selected folder or handed to Android's share sheet. A share action does not claim that Google Drive saved the file; confirm the destination in the selected app. These archives contain member contact and financial information and are not encrypted by the app.
 
-Restore first shows the selected gym, archive date and record counts. After confirmation, the app writes and verifies a local recovery copy before replacing records in a transaction. Recovery copies remain available after replacement or failure, and can be previewed, shared or restored from Gym settings; restoring one creates another copy without overwriting earlier copies. Profile-photo restoration failures are reported separately. A recovery copy on this phone does not protect against loss, uninstall or device failure: keep an external copy too. New exports and recovery copies use archive version 2 to preserve purchased plan names and payment reversals; older apps reject these files instead of losing reversal information. Old version-1 JSON archives remain supported for import.
+Restore first shows the selected gym, archive date and record counts. After confirmation, the app writes and verifies a local recovery copy before replacing records in a transaction. Recovery copies remain available after replacement or failure, and can be previewed, shared or restored from Gym settings; restoring one creates another copy without overwriting earlier copies. Missing source photos are disclosed before export and restore, and photo-restoration failures are reported separately. A recovery copy on this phone does not protect against loss, uninstall or device failure: keep an external copy too. New exports and recovery copies use archive version 2 to preserve purchased plan names and payment reversals; older apps reject these files instead of losing reversal information. Old version-1 JSON archives remain supported for import.
+
+Folder saves are read back and compared with the complete archive before being recorded as successful; failed writes attempt to remove only the newly created incomplete file. Sharing uses a separate verified cache copy that stays available after the share picker closes, so delayed receiving apps can still read it. Only a folder save updates the recorded backup date. Closing the share picker does not prove that the destination saved the file; check the receiving app. See [the Android backup release check](docs/backup-device-check.md) for device verification.
 
 Install signed updates over the existing app without uninstalling it. The Android package ID remains `in.parsewave.pulsefitness`; take a backup before any update. An Android bundle export verifies compilation but is not an installable APK or a device test.
 

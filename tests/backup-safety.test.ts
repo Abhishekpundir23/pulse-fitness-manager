@@ -41,8 +41,42 @@ test('preview is read-only and includes gym identity and every record count', ()
   assert.deepEqual(previewArchive(input), {
     gymName: 'Northside Gym', exportedAt: '2026-09-20T10:00:00.000Z',
     counts: { members: 0, memberships: 0, payments: 0, attendance: 0, expenses: 0, plans: 0, photos: 0 },
+    missingPhotos: 0,
   });
   assert.deepEqual(input, archive('Northside Gym'));
+});
+
+function archiveWithPhotos() {
+  const selected = archive('Photo gym');
+  selected.data.members = [1, 2, 3].map((id) => ({
+    id, membership_id: `PF-${id}`, name: `Member ${id}`, gender: 'Other', phone: `900000000${id}`,
+    email: null, date_of_birth: null, address: null, notes: null,
+    photo_uri: id === 3 ? null : `file:///old/${id}.jpg`, status: 'active',
+    joined_at: '2026-09-01', created_at: '2026-09-01 10:00:00', updated_at: '2026-09-01 10:00:00',
+  }));
+  selected.memberPhotos = { '1': { data: 'cGhvdG8=', extension: 'jpg' } };
+  return selected;
+}
+
+test('preview identifies a missing photo without counting profiles that never had one', () => {
+  const preview = previewArchive(archiveWithPhotos());
+  assert.equal(preview.counts.photos, 1);
+  assert.equal(preview.missingPhotos, 1);
+});
+
+test('restore reports photos omitted from an older backup even when all embedded photos restore', async () => {
+  const state = storage();
+  const result = await runRestoreWithRecovery(archiveWithPhotos(), state.operations, true);
+  assert.equal(result!.skippedPhotos, 1);
+  assert.equal(result!.photoWarning, true);
+});
+
+test('restore counts both missing source photos and embedded photos that failed to write', async () => {
+  const state = storage();
+  state.operations.restorePhotos = async () => 1;
+  const result = await runRestoreWithRecovery(archiveWithPhotos(), state.operations, true);
+  assert.equal(result!.skippedPhotos, 2);
+  assert.equal(result!.photoWarning, true);
 });
 
 test('cancelling a preview writes no recovery and leaves the current gym unchanged', async () => {
