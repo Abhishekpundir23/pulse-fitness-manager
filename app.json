@@ -2,7 +2,7 @@
   "expo": {
     "name": "Pulse Fitness Manager",
     "slug": "pulse-fitness-manager",
-    "version": "1.2.1",
+    "version": "1.4.0",
     "orientation": "portrait",
     "icon": "./assets/images/pulse-icon-1024.png",
     "scheme": "pulsefitness",
@@ -13,13 +13,22 @@
     },
     "android": {
       "package": "in.parsewave.pulsefitness",
-      "versionCode": 9,
+      "versionCode": 11,
       "adaptiveIcon": {
         "backgroundColor": "#0B1320",
         "foregroundImage": "./assets/images/pulse-icon-1024.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "allowBackup": false,
+      "blockedPermissions": [
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "output": "static",
@@ -48,7 +57,8 @@
           "cameraPermission": "Allow Pulse Fitness Manager to take member profile photos.",
           "microphonePermission": false
         }
-      ]
+      ],
+      "./plugins/with-local-data.cjs"
     ],
     "experiments": {
       "typedRoutes": true,

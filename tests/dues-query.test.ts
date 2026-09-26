@@ -1,23 +1,32 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { fileURLToPath, URL } from 'node:url';
 
-const source = readFileSync(fileURLToPath(new URL('../lib/database.ts', import.meta.url)), 'utf8');
+import {
+  cancelMembership, createMember, createPlan, getDashboardStats, getMemberDetail,
+  getMembers, getPlans, getReportData, migrateDbIfNeeded,
+} from '../lib/database.ts';
+import { memoryDatabase } from './helpers/sqlite.ts';
 
-test('dashboard and reports exclude only cancelled memberships from dues', () => {
-  const dashboardFinance = source.slice(
-    source.indexOf('const finance ='),
-    source.indexOf('const present ='),
-  );
-  const reportSummary = source.slice(
-    source.indexOf('const summary ='),
-    source.indexOf('const month ='),
-  );
-
-  for (const query of [dashboardFinance, reportSummary]) {
-    assert.match(query, /WHEN status != 'cancelled' THEN MAX\(total_amount - paid_amount, 0\)/);
-  }
-  assert.doesNotMatch(dashboardFinance, /WHERE status = 'active'/);
-  assert.doesNotMatch(reportSummary, /WHEN status = 'active' THEN MAX\(total_amount - paid_amount, 0\)/);
+test('cancellation removes only the cancelled balance and preserves receipts and earlier historical debt', async () => {
+  const { db, close } = memoryDatabase();
+  try {
+    await migrateDbIfNeeded(db);
+    await createPlan(db, 'Monthly', 1, 600.50);
+    const plan = (await getPlans(db))[0];
+    const memberId = await createMember(db, {
+      name: 'Synthetic cancellation', phone: '9000000001', gender: 'Other', planId: plan.id,
+      joiningDate: '2000-01-01', discountAmount: 0, admissionFee: 0,
+      initialPayment: 300.25, paymentMethod: 'Cash',
+    });
+    const membershipId = (await getMemberDetail(db, memberId))!.membership_row_id!;
+    assert.equal((await getDashboardStats(db)).outstandingDue, 300.25);
+    assert.equal((await getReportData(db)).totalDue, 300.25);
+    await cancelMembership(db, memberId, membershipId);
+    assert.equal((await getDashboardStats(db)).outstandingDue, 0);
+    const report = await getReportData(db);
+    assert.equal(report.totalDue, 0);
+    assert.equal(report.totalCollected, 300.25);
+    assert.equal((await getMembers(db, '', 'due')).length, 0);
+    assert.equal((await getMembers(db, '', 'due', '2000-01-31'))[0].due_amount, 300.25);
+  } finally { close(); }
 });

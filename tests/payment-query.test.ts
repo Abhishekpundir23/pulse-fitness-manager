@@ -22,3 +22,11 @@ test('payment query filters member identity and payment method', () => {
   assert.ok(query.args.includes('%PF-0042%'));
   assert.ok(query.args.includes('UPI'));
 });
+
+test('current-month history stops at today to agree with monthly reports', (context) => {
+  context.mock.timers.enable({ apis: ['Date'], now: new Date('2026-06-15T12:00:00').getTime() });
+  try {
+    const query = buildPaymentHistoryQuery({ search: '', month: '2026-06', method: 'all' });
+    assert.deepEqual(query.args.slice(-2), ['2026-06-01', '2026-06-15']);
+  } finally { context.mock.timers.reset(); }
+});

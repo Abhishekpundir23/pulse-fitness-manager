@@ -6,7 +6,7 @@ const reportsSource = readFileSync(new URL('../app/(tabs)/reports.tsx', import.m
 const paymentsSource = readFileSync(new URL('../app/payments.tsx', import.meta.url).pathname, 'utf8');
 
 test('Reports View all opens payment history and preview rows open their member', () => {
-  assert.match(reportsSource, /onPress=\{\(\) => router\.push\('\/payments'\)\}/);
+  assert.match(reportsSource, /onPress=\{\(\) => router\.push\(\{ pathname: '\/payments', params: \{ month \} \}\)\}/);
   assert.match(reportsSource, /onPress=\{\(\) => router\.push\(`\/member\/\$\{payment\.member_id\}`\)\}/);
 });
 

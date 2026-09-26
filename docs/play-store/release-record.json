@@ -1,0 +1,48 @@
+{
+  "version": "1.4.0",
+  "versionCode": 11,
+  "packageName": "in.parsewave.pulsefitness",
+  "publisher": "Abhishek Pundir",
+  "supportEmail": "abhiyo13@gmail.com",
+  "preparedDate": "2026-09-26",
+  "sourceCommit": "4b9ece3036af834f56f16d62cb411650f70c7cf1",
+  "sourceStatus": "Final APK and AAB built from this application source. Later documentation-only commits do not change the artifacts.",
+  "apk": {
+    "file": "Pulse-Fitness-Manager-v1.4.0-build11.apk",
+    "easBuildId": "5a1e5692-2d89-4f14-9b91-49eaea34cf88",
+    "sha256": "662afd07b671304b12f63aa64a7ac1db61ade0816b9e3363222b946776b54d6f",
+    "verification": "Final signed APK: direct 1.2.1/build9 upgrade preserved every prior database field and photo bytes. Native folder backup and restore matched all seven tables."
+  },
+  "aab": {
+    "file": "Pulse-Fitness-Manager-v1.4.0-build11.aab",
+    "easBuildId": "68f35c3d-044a-47d6-a416-c3f13054e905",
+    "sha256": "b3b8f32986b682d6193d7bad71d2890e7a1905f53071bf2ca47871159e221b6d",
+    "verification": "Final production AAB validated; generated APK passed runtime with true 16 KB pages and compatibility disabled. Existing certificate confirmed. Not uploaded to Play."
+  },
+  "expectedExistingAppSigningCertificateSha256": "d7cf956bf2bbcc79eba2e595080c38111a9e56ddebee6d8c0bd92842a668da03",
+  "nativeBundleVerification": "API 36 manifest, signing continuity, backup exclusions, optional camera, 16 KB ZIP and all 44 native LOAD alignments verified. AAB-generated test APK passed offline native workflows on API 36/16 KB with compatibility mode disabled. 38 strict RELRO-end warnings reviewed: no rounded-protection overlap with writable payload; warnings retained. Play Console acceptance remains unverified.",
+  "privacyPolicyPublicUrl": null,
+  "privacyHostingStatus": "Standalone policy prepared; not hosted by this task.",
+  "storeAssetsStatus": "Icon and feature graphic verified; seven actual final-APK phone screenshots captured with fictional records. See graphics-verification.json and screenshots-verification.json in the delivery pack.",
+  "playConsoleStatus": "Not accessed or submitted by this task.",
+  "productionApprovalStatus": "Not requested or confirmed.",
+  "codeVerification": {
+    "lint": "pass",
+    "typescript": "pass",
+    "tests": {
+      "passed": 150,
+      "failed": 0
+    },
+    "expoDoctor": {
+      "passed": 18,
+      "failed": 0
+    },
+    "githubCi": "pass on final application source 4b9ece3; run 36251880358"
+  },
+  "gitIdentity": {
+    "author": "Abhishekpundir23 <74260202+Abhishekpundir23@users.noreply.github.com>",
+    "committer": "Abhishekpundir23 <74260202+Abhishekpundir23@users.noreply.github.com>",
+    "verifiedBeforeCommitAndPush": true
+  },
+  "validationRecord": "docs/releases/1.4-validation.md (copied into delivery pack as VALIDATION.md)"
+}

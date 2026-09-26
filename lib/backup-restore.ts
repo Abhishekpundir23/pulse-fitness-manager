@@ -44,6 +44,7 @@ async function insertRows(
 export async function replaceDatabaseRows(
   transaction: RestoreTransactionHandle,
   archive: BackupArchive,
+  beforeReplace?: () => Promise<void>,
 ) {
   await transaction.execAsync('PRAGMA foreign_keys = ON;');
   const foreignKeys = await transaction.getFirstAsync('PRAGMA foreign_keys;');
@@ -53,6 +54,9 @@ export async function replaceDatabaseRows(
 
   await transaction.execAsync('BEGIN IMMEDIATE;');
   try {
+    // Hold the write lock while the current records are captured and the durable
+    // recovery file is verified. Failure here must precede every DELETE.
+    await beforeReplace?.();
     // Older installations may already contain duplicate phone values. Temporarily
     // remove the write guards so a verified backup can restore those rows exactly.
     await transaction.execAsync(DROP_MEMBER_PHONE_GUARDS_SQL);

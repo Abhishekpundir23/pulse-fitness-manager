@@ -99,6 +99,8 @@ test('executes historical payment, cancellation, and join-date semantics in SQLi
         INSERT INTO payments VALUES
           (30, 20, 300, '2026-06-01'),
           (31, 20, 300, '2026-07-05');
+        ALTER TABLE memberships ADD COLUMN plan_name TEXT;
+        ALTER TABLE payments ADD COLUMN voided_at TEXT;
       `,
       stdio: ['pipe', 'pipe', 'pipe'],
     });

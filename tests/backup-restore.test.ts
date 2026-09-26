@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 
 import {
   prepareMembersForRestore,
@@ -7,7 +8,7 @@ import {
   restorePhotosIndependently,
   type RestoreTransactionHandle,
 } from '../lib/backup-restore.ts';
-import type { BackupArchive } from '../lib/backup-archive.ts';
+import { TABLE_COLUMNS, type BackupArchive } from '../lib/backup-archive.ts';
 
 const archive: BackupArchive = {
   app: 'Pulse Fitness Manager',
@@ -166,6 +167,22 @@ test('rolls back row replacement when any insert fails', async () => {
   assert.equal(events.includes('exec:COMMIT;'), false);
 });
 
+test('writes a recovery copy under the transaction lock before deleting any data', async () => {
+  const { events, handle } = fakeTransaction();
+  await replaceDatabaseRows(handle, archive, async () => { events.push('recovery-verified'); });
+  assert.ok(events.indexOf('exec:BEGIN IMMEDIATE;') < events.indexOf('recovery-verified'));
+  assert.ok(events.indexOf('recovery-verified') < events.findIndex((event) => event.includes('DELETE FROM')));
+});
+
+test('leaves current rows untouched if recovery preparation fails', async () => {
+  const { events, handle } = fakeTransaction();
+  await assert.rejects(() => replaceDatabaseRows(handle, archive, async () => {
+    throw new Error('Recovery disk full');
+  }), /Recovery disk full/);
+  assert.equal(events.some((event) => event.includes('DELETE FROM')), false);
+  assert.equal(events.at(-1), 'exec:ROLLBACK;');
+});
+
 test('restores photos independently and counts failures in order', async () => {
   const attempted: string[] = [];
   const photoUris = new Map<string, string | null>([
@@ -192,4 +209,39 @@ test('restores photos independently and counts failures in order', async () => {
   assert.equal(photoUris.get('10'), 'file:///new/10');
   assert.equal(photoUris.get('11'), null);
   assert.equal(photoUris.get('12'), 'file:///new/12');
+});
+
+test('a real SQLite insert failure rolls back all tables and keeps the recovery snapshot intact', async () => {
+  const sqlite = new DatabaseSync(':memory:');
+  try {
+    for (const [table, columns] of Object.entries(TABLE_COLUMNS)) {
+      sqlite.exec(`CREATE TABLE ${table} (${columns.map((column) => {
+        if (column === 'id') return 'id INTEGER PRIMARY KEY';
+        if (column === 'key') return 'key TEXT PRIMARY KEY';
+        if (column.endsWith('_amount') || ['amount', 'duration_months', 'active', 'member_id', 'plan_id'].includes(column)
+          || (table === 'payments' && column === 'membership_id')) return `${column} REAL`;
+        return `${column} TEXT`;
+      }).join(', ')});`);
+    }
+    const transaction: RestoreTransactionHandle = {
+      async execAsync(sql) { sqlite.exec(sql); },
+      async getFirstAsync(sql) { return sqlite.prepare(sql).get() as { foreign_keys: number } | null; },
+      async runAsync(sql, values) { return sqlite.prepare(sql).run(...values); },
+    };
+    await replaceDatabaseRows(transaction, archive);
+    sqlite.exec("CREATE TRIGGER reject_bad_payment BEFORE INSERT ON payments WHEN NEW.id = 31 BEGIN SELECT RAISE(ABORT, 'Payment write failed'); END;");
+    const incoming = structuredClone(archive);
+    incoming.data.settings[0].value = 'Incoming gym';
+    incoming.data.payments.push({ ...incoming.data.payments[0], id: 31 });
+    let recovery = '';
+    await assert.rejects(() => replaceDatabaseRows(transaction, incoming, async () => {
+      recovery = JSON.stringify(sqlite.prepare('SELECT * FROM payments').all());
+    }), /Payment write failed/);
+    assert.equal(sqlite.prepare("SELECT value FROM settings WHERE key = 'gym_name'").get()!.value, 'Pulse Fitness');
+    assert.deepEqual(sqlite.prepare('SELECT id, amount FROM payments').all().map((row) => ({ ...row })), [{ id: 30, amount: 300 }]);
+    assert.deepEqual(JSON.parse(recovery).map((row: { id: number }) => row.id), [30]);
+    assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM memberships').get()!.n, 1);
+  } finally {
+    sqlite.close();
+  }
 });

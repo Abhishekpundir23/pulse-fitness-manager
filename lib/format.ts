@@ -2,13 +2,14 @@ export function formatCurrency(value: number) {
   return new Intl.NumberFormat('en-IN', {
     style: 'currency',
     currency: 'INR',
-    maximumFractionDigits: 0,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
   }).format(Number.isFinite(value) ? value : 0);
 }
 
 export function formatDate(value?: string | null, options?: Intl.DateTimeFormatOptions) {
   if (!value) return 'Not set';
-  const date = new Date(`${value}T00:00:00`);
+  const date = new Date(value.includes('T') ? value : `${value}T00:00:00`);
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat('en-IN', options ?? {
     day: '2-digit',
@@ -54,4 +55,3 @@ export function daysUntil(value?: string | null) {
   const target = new Date(`${value}T00:00:00`).getTime();
   return Math.ceil((target - today) / 86_400_000);
 }
-

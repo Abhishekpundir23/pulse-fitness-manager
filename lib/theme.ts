@@ -1,8 +1,8 @@
 export const palette = {
   ink: '#0B1320',
   inkSoft: '#3E4A59',
-  muted: '#7C8796',
-  canvas: '#F4F6F8',
+  muted: '#647181',
+  canvas: '#F5F7F8',
   card: '#FFFFFF',
   line: '#E5E9EE',
   emerald: '#14B87A',
@@ -21,15 +21,14 @@ export const palette = {
 
 export const shadows = {
   card: {
-    boxShadow: '0 6px 16px rgba(11, 19, 32, 0.08)',
-    elevation: 3,
+    boxShadow: '0 2px 8px rgba(11, 19, 32, 0.045)',
   },
 };
 
 export const radii = {
   sm: 10,
-  md: 16,
-  lg: 22,
-  xl: 30,
+  md: 14,
+  lg: 18,
+  xl: 24,
   pill: 999,
 };

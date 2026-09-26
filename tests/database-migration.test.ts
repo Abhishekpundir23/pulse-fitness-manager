@@ -31,7 +31,7 @@ function sqliteAdapter(dbPath: string) {
   };
 }
 
-test('upgrades representative v2 data to v4 without altering records or backup status', async () => {
+test('upgrades representative v2 data to v5 without altering existing records or backup status', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'pulse-migration-'));
   const dbPath = join(directory, 'pulse.db');
 
@@ -81,7 +81,7 @@ test('upgrades representative v2 data to v4 without altering records or backup s
     const recordsBefore = {
       members: query(dbPath, 'SELECT * FROM members ORDER BY id;'),
       memberships: query(dbPath, 'SELECT id, member_id, plan_id, start_date, end_date, total_amount, status FROM memberships ORDER BY id;'),
-      payments: query(dbPath, 'SELECT * FROM payments ORDER BY id;'),
+      payments: query(dbPath, 'SELECT id, member_id, membership_id, amount, method, paid_at FROM payments ORDER BY id;'),
     };
     const db = sqliteAdapter(dbPath);
 
@@ -102,7 +102,7 @@ test('upgrades representative v2 data to v4 without altering records or backup s
     assert.deepEqual({
       members: query(dbPath, 'SELECT * FROM members ORDER BY id;'),
       memberships: query(dbPath, 'SELECT id, member_id, plan_id, start_date, end_date, total_amount, status FROM memberships ORDER BY id;'),
-      payments: query(dbPath, 'SELECT * FROM payments ORDER BY id;'),
+      payments: query(dbPath, 'SELECT id, member_id, membership_id, amount, method, paid_at FROM payments ORDER BY id;'),
     }, recordsBefore);
     assert.deepEqual(
       query(dbPath, "SELECT key, value FROM settings WHERE key IN ('last_backup_at', 'last_backup_file') ORDER BY key;"),
@@ -131,7 +131,9 @@ test('upgrades representative v2 data to v4 without altering records or backup s
       ],
     );
     assert.throws(() => execute(dbPath, "INSERT INTO members(id, membership_id, name, phone) VALUES (11, 'PF-0011', 'Other', '9999999999');"), /member with this phone number/);
-    assert.deepEqual(query(dbPath, 'PRAGMA user_version;'), [{ user_version: 4 }]);
+    assert.deepEqual(query(dbPath, 'SELECT plan_name FROM memberships ORDER BY id;'), [{ plan_name: 'Monthly' }, { plan_name: 'Monthly' }]);
+    assert.deepEqual(query(dbPath, 'SELECT voided_at, void_reason FROM payments;'), [{ voided_at: null, void_reason: null }]);
+    assert.deepEqual(query(dbPath, 'PRAGMA user_version;'), [{ user_version: 5 }]);
   } finally {
     rmSync(directory, { force: true, recursive: true });
   }

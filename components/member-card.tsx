@@ -3,7 +3,8 @@ import { router } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Avatar } from '@/components/ui-kit';
-import { formatCurrency, formatDate, todayIso } from '@/lib/format';
+import { formatDate, todayIso } from '@/lib/format';
+import { memberBalanceLabel } from '@/lib/member-presentation';
 import { palette, radii } from '@/lib/theme';
 import type { MemberListItem } from '@/lib/types';
 
@@ -34,16 +35,20 @@ export function MemberCard({
       ? `Expired ${formatDate(member.end_date, { day: '2-digit', month: 'short' })}`
       : member.snapshot_status === 'active'
         ? `Ends ${formatDate(member.end_date, { day: '2-digit', month: 'short' })}`
-        : 'No membership';
+        : member.snapshot_status === 'upcoming' ? 'Starts later'
+          : member.snapshot_status === 'frozen' ? 'Frozen'
+            : 'No membership';
 
   return (
     <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${member.name}, ${statusCopy}, ${memberBalanceLabel(member.due_amount, member.snapshot_status)}`}
       onPress={() => router.push(`/member/${member.id}`)}
       style={({ pressed }) => [styles.card, compact && styles.compact, pressed && styles.pressed]}>
       <Avatar name={member.name} uri={member.photo_uri} size={compact ? 46 : 58} />
       <View style={styles.copy}>
         <View style={styles.titleRow}>
-          <Text numberOfLines={1} style={styles.name}>{member.name}</Text>
+          <Text style={styles.name}>{member.name}</Text>
           {member.attended_today === 1 && (
             <View style={styles.presentPill}>
               <View style={styles.presentDot} />
@@ -54,27 +59,21 @@ export function MemberCard({
         <Text style={styles.meta}>
           {member.membership_id}  ·  {planLine}
         </Text>
-        {!compact && (
-          <View style={styles.footer}>
-            <View style={styles.footerItem}>
-              <Ionicons name="calendar-outline" size={15} color={palette.muted} />
-              <Text style={[styles.footerText, (expired || warning) && styles.warningText]}>
-                {statusCopy}
-              </Text>
-            </View>
-            <Text style={[
-              styles.due,
-              member.due_amount === 0 && styles.paid,
-              (cancelled || member.snapshot_status === 'none') && styles.cancelled,
-            ]}>
-              {cancelled || member.snapshot_status === 'none'
-                ? 'No due'
-                : member.due_amount > 0
-                  ? `${formatCurrency(member.due_amount)} due`
-                  : 'Paid'}
+        <View style={[styles.footer, compact && styles.compactFooter]}>
+          <View style={styles.footerItem}>
+            <Ionicons name={warning ? 'time-outline' : 'calendar-outline'} size={15} color={warning ? '#956208' : palette.muted} />
+            <Text style={[styles.footerText, (expired || warning) && styles.warningText]}>
+              {member.status === 'blocked' ? `Blocked · ${statusCopy}` : statusCopy}
             </Text>
           </View>
-        )}
+          <Text style={[
+            styles.due,
+            member.due_amount === 0 && styles.paid,
+            member.due_amount === 0 && (cancelled || member.snapshot_status === 'none') && styles.cancelled,
+          ]}>
+            {memberBalanceLabel(member.due_amount, member.snapshot_status)}
+          </Text>
+        </View>
       </View>
       <Ionicons name="chevron-forward" size={19} color={palette.muted} />
     </Pressable>
@@ -88,24 +87,27 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderBottomWidth: 1,
     borderBottomColor: palette.line,
-    gap: 13,
+    gap: 11,
   },
   compact: { paddingVertical: 11 },
   pressed: { opacity: 0.68 },
   copy: { flex: 1 },
-  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  name: { flexShrink: 1, color: palette.ink, fontSize: 16, fontWeight: '800' },
-  meta: { color: palette.muted, fontSize: 12, marginTop: 4 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
+  name: { flexShrink: 1, color: palette.ink, fontSize: 16, lineHeight: 22, fontWeight: '800' },
+  meta: { color: palette.muted, fontSize: 13, lineHeight: 18, marginTop: 4 },
   footer: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 10,
+    marginTop: 8,
   },
-  footerItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  footerText: { color: palette.inkSoft, fontSize: 12, fontWeight: '600' },
-  warningText: { color: palette.amber, fontWeight: '800' },
-  due: { color: palette.red, fontSize: 12, fontWeight: '800' },
+  compactFooter: { marginTop: 6 },
+  footerItem: { flexDirection: 'row', alignItems: 'center', gap: 5, flexShrink: 1 },
+  footerText: { flexShrink: 1, color: palette.inkSoft, fontSize: 13, fontWeight: '600' },
+  warningText: { color: '#956208', fontWeight: '800' },
+  due: { color: palette.red, fontSize: 13, fontWeight: '800' },
   paid: { color: palette.emeraldDark },
   cancelled: { color: palette.muted },
   presentPill: {

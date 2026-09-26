@@ -1,5 +1,5 @@
 export const BACKUP_APP = 'Pulse Fitness Manager' as const;
-export const BACKUP_SCHEMA_VERSION = 1 as const;
+export const BACKUP_SCHEMA_VERSION = 2 as const;
 
 export const BACKUP_TABLES = [
   'settings',
@@ -48,6 +48,7 @@ export type MembershipBackupRow = BackupRow & {
   id: number;
   member_id: number;
   plan_id: number;
+  plan_name?: string | null;
   start_date: string;
   end_date: string;
   base_amount: number;
@@ -69,6 +70,8 @@ export type PaymentBackupRow = BackupRow & {
   paid_at: string;
   note: string | null;
   created_at: string;
+  voided_at?: string | null;
+  void_reason?: string | null;
 };
 
 export type AttendanceBackupRow = BackupRow & {
@@ -101,7 +104,7 @@ export type BackupData = {
 
 export type BackupArchive = {
   app: typeof BACKUP_APP;
-  schemaVersion: typeof BACKUP_SCHEMA_VERSION;
+  schemaVersion: 1 | typeof BACKUP_SCHEMA_VERSION;
   exportedAt: string;
   data: BackupData;
   memberPhotos?: Record<string, { data: string; extension: string }>;
@@ -136,6 +139,7 @@ export const TABLE_COLUMNS: { [Table in BackupTable]: (keyof BackupData[Table][n
     'id',
     'member_id',
     'plan_id',
+    'plan_name',
     'start_date',
     'end_date',
     'base_amount',
@@ -156,6 +160,8 @@ export const TABLE_COLUMNS: { [Table in BackupTable]: (keyof BackupData[Table][n
     'paid_at',
     'note',
     'created_at',
+    'voided_at',
+    'void_reason',
   ],
   attendance: ['id', 'member_id', 'attendance_date', 'check_in_time', 'created_at'],
   expenses: ['id', 'title', 'amount', 'expense_date', 'category', 'notes', 'created_at'],
@@ -242,6 +248,9 @@ function validateRows(table: BackupTable, rows: unknown[]): asserts rows is Back
       invalidField(table, rowIndex, 'active', 'an integer');
     }
     if (table === 'memberships') {
+      if (value.plan_name !== undefined && value.plan_name !== null && typeof value.plan_name !== 'string') {
+        invalidField(table, rowIndex, 'plan_name', 'a string, null, or omitted');
+      }
       if (!Number.isSafeInteger(value.member_id)) {
         invalidField(table, rowIndex, 'member_id', 'a safe integer');
       }
@@ -255,6 +264,14 @@ function validateRows(table: BackupTable, rows: unknown[]): asserts rows is Back
       }
     }
     if (table === 'payments') {
+      const voidedAt = value.voided_at ?? null;
+      const reason = value.void_reason ?? null;
+      if (voidedAt !== null || reason !== null) {
+        if (typeof voidedAt !== 'string' || !isTimestamp(voidedAt)
+          || typeof reason !== 'string' || !reason.trim()) {
+          invalidField(table, rowIndex, 'void metadata', 'a valid voided_at timestamp and a non-empty void_reason together');
+        }
+      }
       if (!Number.isSafeInteger(value.member_id)) {
         invalidField(table, rowIndex, 'member_id', 'a safe integer');
       }
@@ -266,6 +283,43 @@ function validateRows(table: BackupTable, rows: unknown[]): asserts rows is Back
       invalidField(table, rowIndex, 'member_id', 'a safe integer');
     }
   });
+}
+
+function isTimestamp(value: string) {
+  return /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(value)
+    && Number.isFinite(Date.parse(value.replace(' ', 'T')));
+}
+
+function validateFinances(data: BackupData) {
+  const moneyFields = {
+    plans: ['amount'],
+    memberships: ['base_amount', 'discount_amount', 'admission_fee', 'total_amount', 'paid_amount'],
+    payments: ['amount'],
+    expenses: ['amount'],
+  } as const;
+  for (const [table, fields] of Object.entries(moneyFields)) {
+    data[table as keyof typeof moneyFields].forEach((row, index) => {
+      for (const field of fields) {
+        const amount = row[field] as number;
+        if (amount < 0 || !Number.isSafeInteger(Math.round(amount * 100))) {
+          invalidField(table as BackupTable, index, field, 'a non-negative money amount within the supported range');
+        }
+      }
+    });
+  }
+  const paid = new Map<number, number>();
+  for (const payment of data.payments) {
+    if (payment.voided_at) continue;
+    paid.set(payment.membership_id, (paid.get(payment.membership_id) ?? 0) + payment.amount);
+  }
+  for (const membership of data.memberships) {
+    if (Math.round(membership.paid_amount * 100) !== Math.round((paid.get(membership.id) ?? 0) * 100)) {
+      throw new Error(`Backup membership ${membership.id} paid amount does not match its non-voided payment total.`);
+    }
+    if (Math.round(membership.paid_amount * 100) > Math.round(membership.total_amount * 100)) {
+      throw new Error(`Backup membership ${membership.id} payments exceed its total amount.`);
+    }
+  }
 }
 
 function uniqueValues(
@@ -341,8 +395,9 @@ function validateMemberPhotos(value: unknown, memberIds: Set<string | number>) {
       throw new Error(`Backup photo references an unknown member ${memberId}.`);
     }
     if (!isObject(photo)) throw new Error(`Backup photo for member ${memberId} must be an object.`);
-    if (typeof photo.data !== 'string' || photo.data.length === 0) {
-      throw new Error(`Backup photo data for member ${memberId} must be a non-empty string.`);
+    if (typeof photo.data !== 'string' || photo.data.length === 0
+      || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(photo.data)) {
+      throw new Error(`Backup photo data for member ${memberId} must be valid base64.`);
     }
     if (typeof photo.extension !== 'string' || !/^[a-zA-Z0-9]+$/.test(photo.extension)) {
       throw new Error(`Backup photo extension for member ${memberId} must be alphanumeric.`);
@@ -352,11 +407,11 @@ function validateMemberPhotos(value: unknown, memberIds: Set<string | number>) {
 
 export function validateBackupArchive(value: unknown): BackupArchive {
   if (!isObject(value)) throw new Error('This is not a valid backup file.');
-  if (value.app !== BACKUP_APP || value.schemaVersion !== BACKUP_SCHEMA_VERSION) {
+  if (value.app !== BACKUP_APP || (value.schemaVersion !== 1 && value.schemaVersion !== BACKUP_SCHEMA_VERSION)) {
     throw new Error('This backup is not compatible with this app version.');
   }
-  if (typeof value.exportedAt !== 'string' || !value.exportedAt) {
-    throw new Error('Backup exportedAt must be a non-empty string.');
+  if (typeof value.exportedAt !== 'string' || !isTimestamp(value.exportedAt)) {
+    throw new Error('Backup exportedAt must be a valid timestamp.');
   }
   if (!isObject(value.data)) throw new Error('Backup data must be an object.');
 
@@ -366,10 +421,20 @@ export function validateBackupArchive(value: unknown): BackupArchive {
     validateRows(table, rows);
   }
 
-  const data = value.data as BackupData;
+  const originalData = value.data as BackupData;
+  const data: BackupData = {
+    ...originalData,
+    memberships: originalData.memberships.map((row) => ({
+      ...row,
+      plan_name: row.plan_name ?? originalData.plans.find((plan) => plan.id === row.plan_id)?.name ?? null,
+      cancelled_at: row.cancelled_at ?? null,
+    })),
+    payments: originalData.payments.map((row) => ({ ...row, voided_at: row.voided_at ?? null, void_reason: row.void_reason ?? null })),
+  };
   const memberIds = validateRelationships(data);
+  validateFinances(data);
   validateMemberPhotos(value.memberPhotos, memberIds);
-  return value as BackupArchive;
+  return { ...value, data } as BackupArchive;
 }
 
 export function parseBackupArchive(serialized: string): BackupArchive {
@@ -391,5 +456,7 @@ export function summarizeBackup(archive: BackupArchive): BackupSummary {
 }
 
 export function serializeBackup(archive: BackupArchive): string {
-  return JSON.stringify(validateBackupArchive(archive), null, 2);
+  // Older apps accept v1 but cannot understand payment reversals. Mark every new
+  // file v2 so an old app refuses it instead of silently reviving voided receipts.
+  return JSON.stringify({ ...validateBackupArchive(archive), schemaVersion: BACKUP_SCHEMA_VERSION }, null, 2);
 }

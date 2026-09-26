@@ -1,11 +1,14 @@
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { ReactNode, useState } from 'react';
+import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
+import { HeaderShownContext } from '@react-navigation/elements';
+import { ReactNode, useContext, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleProp,
   StyleSheet,
@@ -24,24 +27,37 @@ export function Screen({
   children,
   scroll = true,
   contentContainerStyle,
+  refreshing = false,
+  onRefresh,
 }: {
   children: ReactNode;
   scroll?: boolean;
   contentContainerStyle?: StyleProp<ViewStyle>;
+  refreshing?: boolean;
+  onRefresh?: () => void;
 }) {
+  const tabBarHeight = useContext(BottomTabBarHeightContext);
+  const headerShown = useContext(HeaderShownContext);
   const content = scroll ? (
     <ScrollView
       style={styles.flex}
       contentInsetAdjustmentBehavior="automatic"
       showsVerticalScrollIndicator={false}
       contentContainerStyle={[styles.screenContent, contentContainerStyle]}
+      refreshControl={onRefresh ? <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.emeraldDark} colors={[palette.emeraldDark]} /> : undefined}
       keyboardShouldPersistTaps="handled">
       {children}
     </ScrollView>
   ) : (
     <View style={[styles.screenContent, styles.flex, contentContainerStyle]}>{children}</View>
   );
-  return <SafeAreaView style={styles.safeArea}>{content}</SafeAreaView>;
+  return (
+    <SafeAreaView
+      style={styles.safeArea}
+      edges={{ top: headerShown ? 'off' : 'additive', right: 'additive', bottom: tabBarHeight === undefined ? 'additive' : 'off', left: 'additive' }}>
+      {content}
+    </SafeAreaView>
+  );
 }
 
 export function TopBar({
@@ -73,16 +89,19 @@ export function IconButton({
   color = palette.ink,
   backgroundColor = palette.card,
   size = 22,
+  accessibilityLabel,
 }: {
   name: keyof typeof Ionicons.glyphMap;
   onPress: () => void;
   color?: string;
   backgroundColor?: string;
   size?: number;
+  accessibilityLabel?: string;
 }) {
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel ?? name.replace(/-outline$/, '').replace(/-/g, ' ')}
       onPress={onPress}
       style={({ pressed }) => [
         styles.iconButton,
@@ -212,6 +231,7 @@ export function FormField({
       <View style={styles.field}>
         {!!icon && <Ionicons name={icon} size={20} color={palette.muted} />}
         <TextInput
+          accessibilityLabel={label}
           placeholderTextColor={palette.muted}
           style={[styles.input, props.multiline && styles.multiline]}
           {...props}
@@ -242,7 +262,7 @@ export function DateField({
   return (
     <View style={styles.fieldWrap}>
       <Text style={styles.fieldLabel}>{label}</Text>
-      <Pressable style={styles.field} onPress={() => setShow(true)}>
+      <Pressable accessibilityRole="button" accessibilityLabel={`${label}: ${formatDate(value)}`} style={styles.field} onPress={() => setShow(true)}>
         <Ionicons name="calendar-outline" size={20} color={palette.muted} />
         <Text style={styles.dateText}>{formatDate(value)}</Text>
       </Pressable>
@@ -271,6 +291,9 @@ export function Chip({
 }) {
   return (
     <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      accessibilityLabel={label}
       onPress={onPress}
       style={({ pressed }) => [
         styles.chip,
@@ -307,6 +330,8 @@ export function PrimaryButton({
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: !!(disabled || loading), busy: !!loading }}
       disabled={disabled || loading}
       onPress={onPress}
       style={({ pressed }) => [
@@ -376,6 +401,9 @@ export function SearchBox({
     <View style={styles.searchBox}>
       <Ionicons name="search" size={20} color={palette.muted} />
       <TextInput
+        accessibilityLabel={placeholder}
+        autoCorrect={false}
+        returnKeyType="search"
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
@@ -383,7 +411,7 @@ export function SearchBox({
         style={styles.searchInput}
       />
       {!!value && (
-        <Pressable onPress={() => onChangeText('')}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Clear search" onPress={() => onChangeText('')} style={styles.clearSearch}>
           <Ionicons name="close-circle" size={20} color={palette.muted} />
         </Pressable>
       )}
@@ -402,30 +430,30 @@ export function LoadingView() {
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: palette.canvas },
   flex: { flex: 1 },
-  screenContent: { paddingHorizontal: 18, paddingBottom: 120, backgroundColor: palette.canvas },
+  screenContent: { paddingHorizontal: 18, paddingBottom: 28, backgroundColor: palette.canvas },
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingTop: 10,
-    paddingBottom: 22,
+    paddingBottom: 18,
     gap: 16,
   },
   topBarCopy: { flex: 1 },
   eyebrow: {
     color: palette.emeraldDark,
-    fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 1.4,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.1,
     textTransform: 'uppercase',
     marginBottom: 5,
   },
-  topBarTitle: { color: palette.ink, fontSize: 30, fontWeight: '900', letterSpacing: -0.8 },
+  topBarTitle: { color: palette.ink, fontSize: 28, fontWeight: '800', letterSpacing: -0.7 },
   topBarSubtitle: { color: palette.muted, fontSize: 14, lineHeight: 20, marginTop: 5 },
   iconButton: {
-    width: 46,
-    height: 46,
-    borderRadius: 16,
+    width: 48,
+    height: 48,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
     ...shadows.card,
@@ -449,22 +477,22 @@ const styles = StyleSheet.create({
   sectionSubtitle: { color: palette.muted, fontSize: 13, marginTop: 3, lineHeight: 18 },
   statCard: {
     width: '48%',
-    minHeight: 142,
-    padding: 16,
+    minHeight: 116,
+    padding: 14,
     backgroundColor: palette.card,
     borderRadius: radii.lg,
     ...shadows.card,
   },
   statIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 13,
+    width: 32,
+    height: 32,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 16,
+    marginBottom: 10,
   },
-  statValue: { color: palette.ink, fontSize: 23, fontWeight: '900', letterSpacing: -0.5 },
-  statLabel: { color: palette.muted, fontSize: 12, fontWeight: '600', marginTop: 5 },
+  statValue: { color: palette.ink, fontSize: 23, fontWeight: '800', letterSpacing: -0.5, fontVariant: ['tabular-nums'] },
+  statLabel: { color: palette.muted, fontSize: 13, fontWeight: '500', marginTop: 5 },
   avatarFallback: {
     backgroundColor: palette.emeraldSoft,
     alignItems: 'center',
@@ -488,7 +516,7 @@ const styles = StyleSheet.create({
   multiline: { minHeight: 92, textAlignVertical: 'top' },
   dateText: { color: palette.ink, fontSize: 16 },
   chip: {
-    minHeight: 42,
+    minHeight: 48,
     paddingHorizontal: 15,
     borderRadius: radii.pill,
     borderWidth: 1,
@@ -519,7 +547,7 @@ const styles = StyleSheet.create({
   },
   dangerButton: { backgroundColor: palette.red },
   disabledButton: { opacity: 0.55 },
-  primaryButtonText: { color: palette.white, fontSize: 16, fontWeight: '800' },
+  primaryButtonText: { color: palette.white, fontSize: 15, fontWeight: '700', textAlign: 'center', flexShrink: 1, paddingVertical: 10 },
   secondaryButtonText: { color: palette.emeraldDark },
   pressed: { opacity: 0.78, transform: [{ scale: 0.99 }] },
   emptyState: { paddingVertical: 24, alignItems: 'center', paddingHorizontal: 18 },
@@ -541,7 +569,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   searchBox: {
-    height: 54,
+    minHeight: 54,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
@@ -553,5 +581,6 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   searchInput: { flex: 1, color: palette.ink, fontSize: 16 },
+  clearSearch: { minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center', marginRight: -12 },
   loading: { minHeight: 220, alignItems: 'center', justifyContent: 'center' },
 });

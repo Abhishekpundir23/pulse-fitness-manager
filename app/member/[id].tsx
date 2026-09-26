@@ -5,12 +5,13 @@ import * as Print from 'expo-print';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import { useSQLiteContext } from 'expo-sqlite';
-import { useCallback, useState } from 'react';
-import { Alert, Linking, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useRef, useState } from 'react';
+import { Alert, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import {
   Avatar,
   EmptyState,
+  FormField,
   LoadingView,
   PrimaryButton,
   Screen,
@@ -22,22 +23,16 @@ import {
   deleteMember,
   getGymProfile,
   getMemberDetail,
+  reversePayment,
   toggleAttendance,
   updateMemberStatus,
 } from '@/lib/database';
-import { daysUntil, formatCurrency, formatDate } from '@/lib/format';
+import { daysUntil, formatCurrency, formatDate, todayIso } from '@/lib/format';
 import { palette, radii, shadows } from '@/lib/theme';
-import type { MemberDetail } from '@/lib/types';
-
-function escapeHtml(value: string) {
-  return value.replace(/[&<>"']/g, (character) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#039;',
-  })[character] ?? character);
-}
+import type { MemberDetail, Membership, Payment } from '@/lib/types';
+import { buildInvoiceHtml } from '@/lib/invoice';
+import { buildDuesReminder, buildRenewalReminder, buildWhatsAppUrl } from '@/lib/reminders';
+import { normalizeMemberPhone } from '@/lib/member-phone';
 
 export default function MemberDetailScreen() {
   const params = useLocalSearchParams<{ id: string }>();
@@ -46,11 +41,21 @@ export default function MemberDetailScreen() {
   const { revision, refreshData } = useAppData();
   const [member, setMember] = useState<MemberDetail | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);
+  const mutationRef = useRef(false);
   const [confirmAction, setConfirmAction] = useState<'cancel' | 'delete' | null>(null);
   const [photoViewerOpen, setPhotoViewerOpen] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const [reminderText, setReminderText] = useState<string | null>(null);
+  const [paymentToReverse, setPaymentToReverse] = useState<Payment | null>(null);
+  const [reversalReason, setReversalReason] = useState('');
 
   const load = useCallback(async () => {
-    setMember(await getMemberDetail(db, memberId));
+    try {
+      setMember(await getMemberDetail(db, memberId));
+      setLoadError('');
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : 'Please try again.');
+    }
   }, [db, memberId]);
 
   useFocusEffect(useCallback(() => {
@@ -59,12 +64,19 @@ export default function MemberDetailScreen() {
   }, [load, revision]));
 
   const markAttendance = async () => {
-    if (!member) return;
+    if (!member || mutationRef.current) return;
+    mutationRef.current = true;
     setBusy(true);
-    await toggleAttendance(db, member.id);
-    refreshData();
-    await load();
-    setBusy(false);
+    try {
+      await toggleAttendance(db, member.id);
+      refreshData();
+      await load();
+    } catch (error) {
+      Alert.alert('Could not update attendance', error instanceof Error ? error.message : 'Please try again.');
+    } finally {
+      mutationRef.current = false;
+      setBusy(false);
+    }
   };
 
   const changeStatus = () => {
@@ -81,9 +93,19 @@ export default function MemberDetailScreen() {
           text: nextStatus === 'blocked' ? 'Block member' : 'Reactivate',
           style: nextStatus === 'blocked' ? 'destructive' : 'default',
           onPress: async () => {
-            await updateMemberStatus(db, member.id, nextStatus);
-            refreshData();
-            await load();
+            if (mutationRef.current) return;
+            mutationRef.current = true;
+            setBusy(true);
+            try {
+              await updateMemberStatus(db, member.id, nextStatus);
+              refreshData();
+              await load();
+            } catch (error) {
+              Alert.alert('Could not update status', error instanceof Error ? error.message : 'Please try again.');
+            } finally {
+              mutationRef.current = false;
+              setBusy(false);
+            }
           },
         },
       ],
@@ -101,7 +123,8 @@ export default function MemberDetailScreen() {
   };
 
   const performConfirmedAction = async () => {
-    if (!member || !confirmAction) return;
+    if (!member || !confirmAction || mutationRef.current) return;
+    mutationRef.current = true;
     setBusy(true);
     try {
       if (confirmAction === 'cancel') {
@@ -123,73 +146,78 @@ export default function MemberDetailScreen() {
         error instanceof Error ? error.message : 'Please try again.',
       );
     } finally {
+      mutationRef.current = false;
       setBusy(false);
     }
   };
 
-  const shareInvoice = async () => {
-    if (!member) return;
+  const shareInvoice = async (period?: Membership) => {
+    if (!member || !period) return;
     setBusy(true);
     try {
+      if (!await Sharing.isAvailableAsync()) throw new Error('PDF sharing is unavailable on this device.');
       const gym = await getGymProfile(db);
-      const paymentRows = member.payments.map((payment) => `
-        <tr>
-          <td>${formatDate(payment.paid_at)}</td>
-          <td>${escapeHtml(payment.method)}</td>
-          <td style="text-align:right">${formatCurrency(payment.amount)}</td>
-        </tr>
-      `).join('');
-      const html = `
-        <html>
-          <head>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <style>
-              body { font-family: Arial, sans-serif; color: #0B1320; padding: 32px; }
-              .header { display: flex; justify-content: space-between; border-bottom: 3px solid #08785A; padding-bottom: 20px; }
-              .brand { font-size: 26px; font-weight: 800; } .muted { color: #7C8796; }
-              .title { margin: 30px 0 18px; font-size: 20px; }
-              .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; background: #F4F6F8; padding: 20px; border-radius: 14px; }
-              .label { color: #7C8796; font-size: 11px; } .value { font-size: 15px; font-weight: 700; margin-top: 4px; }
-              table { width: 100%; border-collapse: collapse; margin-top: 16px; }
-              th, td { padding: 11px; border-bottom: 1px solid #E5E9EE; text-align: left; }
-              th { color: #7C8796; font-size: 11px; text-transform: uppercase; }
-              .total { margin-top: 24px; text-align: right; font-size: 17px; }
-              .due { color: #E24D4D; font-size: 21px; font-weight: 800; }
-              .footer { margin-top: 44px; color: #7C8796; font-size: 10px; text-align: center; }
-            </style>
-          </head>
-          <body>
-            <div class="header">
-              <div><div class="brand">${escapeHtml(gym.gymName)}</div><div class="muted">${escapeHtml(gym.address || 'Gym membership invoice')}</div></div>
-              <div style="text-align:right"><strong>MEMBERSHIP INVOICE</strong><div class="muted">${member.membership_id}</div></div>
-            </div>
-            <div class="title">${escapeHtml(member.name)}</div>
-            <div class="grid">
-              <div><div class="label">PLAN</div><div class="value">${escapeHtml(member.plan_name || 'Membership')}</div></div>
-              <div><div class="label">PHONE</div><div class="value">+91 ${escapeHtml(member.phone)}</div></div>
-              <div><div class="label">START DATE</div><div class="value">${formatDate(member.start_date)}</div></div>
-              <div><div class="label">EXPIRY DATE</div><div class="value">${formatDate(member.end_date)}</div></div>
-              <div><div class="label">PLAN TOTAL</div><div class="value">${formatCurrency(member.total_amount)}</div></div>
-              <div><div class="label">AMOUNT PAID</div><div class="value">${formatCurrency(member.paid_amount)}</div></div>
-            </div>
-            <h3>Payment history</h3>
-            <table><thead><tr><th>Date</th><th>Method</th><th style="text-align:right">Amount</th></tr></thead><tbody>${paymentRows || '<tr><td colspan="3">No payments recorded</td></tr>'}</tbody></table>
-            <div class="total">Balance due<br><span class="due">${formatCurrency(member.due_amount)}</span></div>
-            <div class="footer">Generated locally by Pulse Fitness Manager</div>
-          </body>
-        </html>`;
+      const html = buildInvoiceHtml(gym, member, period, member.payments);
       const { uri } = await Print.printToFileAsync({ html });
-      await Sharing.shareAsync(uri, {
-        mimeType: 'application/pdf',
-        dialogTitle: `Share invoice for ${member.name}`,
-      });
+      await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: `Share ${period.plan_name} invoice for ${member.name}` });
     } catch (error) {
-      Alert.alert('Could not create invoice', error instanceof Error ? error.message : 'Please try again.');
+      Alert.alert('Could not share invoice', error instanceof Error ? error.message : 'Please try again.');
     } finally {
       setBusy(false);
     }
   };
 
+  const prepareReminder = async (kind: 'dues' | 'renewal', period?: Membership) => {
+    if (!member) return;
+    setBusy(true);
+    try {
+      const gym = await getGymProfile(db);
+      const text = kind === 'dues'
+        ? buildDuesReminder(gym, member)
+        : period ? buildRenewalReminder(gym, member, period) : '';
+      buildWhatsAppUrl(member.phone, text);
+      setReminderText(text);
+    } catch (error) {
+      Alert.alert('Could not prepare reminder', error instanceof Error ? error.message : 'Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openContact = async (kind: 'call' | 'whatsapp', text = '') => {
+    if (!member) return;
+    try {
+      const url = kind === 'call' ? `tel:+91${normalizeMemberPhone(member.phone)}` : buildWhatsAppUrl(member.phone, text);
+      await Linking.openURL(url);
+      if (text) setReminderText(null);
+    } catch (error) {
+      Alert.alert('Could not open app', error instanceof Error ? error.message : 'Check that a calling or messaging app is available.');
+    }
+  };
+
+  const confirmReversal = async () => {
+    if (!member || !paymentToReverse || mutationRef.current) return;
+    if (!reversalReason.trim()) {
+      Alert.alert('Reason required', 'Explain why this payment is being reversed.');
+      return;
+    }
+    mutationRef.current = true;
+    setBusy(true);
+    try {
+      await reversePayment(db, member.id, paymentToReverse.id, reversalReason.trim());
+      setPaymentToReverse(null);
+      setReversalReason('');
+      refreshData();
+      await load();
+    } catch (error) {
+      Alert.alert('Could not reverse payment', error instanceof Error ? error.message : 'Please try again.');
+    } finally {
+      mutationRef.current = false;
+      setBusy(false);
+    }
+  };
+
+  if (loadError) return <Screen><EmptyState icon="alert-circle-outline" title="Could not load member" message={loadError} /><PrimaryButton label="Try again" onPress={load} /></Screen>;
   if (member === undefined) return <Screen><LoadingView /></Screen>;
   if (member === null) {
     return (
@@ -206,8 +234,8 @@ export default function MemberDetailScreen() {
     ? Math.min(100, Math.round((member.paid_amount / member.total_amount) * 100))
     : 0;
 
-  const openCall = () => Linking.openURL(`tel:${member.phone}`);
-  const openWhatsApp = () => Linking.openURL(`https://wa.me/91${member.phone.replace(/\D/g, '')}`);
+  const openCall = () => openContact('call');
+  const openWhatsApp = () => openContact('whatsapp');
 
   return (
     <Screen>
@@ -257,6 +285,11 @@ export default function MemberDetailScreen() {
         </View>
       </View>
 
+      <Section title="Total outstanding" subtitle="Unpaid balances across all membership periods">
+        <Text style={styles.lifetimeDue}>{formatCurrency(member.lifetime_due_amount)}</Text>
+        <PrimaryButton label="Draft dues reminder" icon="logo-whatsapp" variant="secondary" disabled={member.lifetime_due_amount <= 0 || busy} onPress={() => prepareReminder('dues')} />
+      </Section>
+
       <Section
         title={member.plan_name || 'Membership'}
         subtitle={`${formatDate(member.start_date)} to ${formatDate(member.end_date)}`}
@@ -269,8 +302,10 @@ export default function MemberDetailScreen() {
               styles.expiryText,
               (planExpired || membershipCancelled) && styles.expiredText,
             ]}>
-              {membershipCancelled
+              {!member.membership_row_id ? 'Not assigned' : membershipCancelled
                 ? 'Cancelled'
+                : member.membership_status === 'frozen' ? 'Frozen'
+                : member.start_date && member.start_date > todayIso() ? `Starts ${formatDate(member.start_date)}`
                 : planExpired
                   ? 'Expired'
                   : remainingDays === 0
@@ -282,6 +317,8 @@ export default function MemberDetailScreen() {
         <View style={styles.amountGrid}>
           <Amount label="Plan amount" value={formatCurrency(member.base_amount)} />
           <Amount label="Discount" value={formatCurrency(member.discount_amount)} />
+          <Amount label="Admission fee" value={formatCurrency(member.admission_fee)} />
+          <Amount label="Paid" value={formatCurrency(member.paid_amount)} />
           <Amount label="Total" value={formatCurrency(member.total_amount)} />
           <Amount label="Balance due" value={formatCurrency(member.due_amount)} danger={member.due_amount > 0} />
         </View>
@@ -323,7 +360,7 @@ export default function MemberDetailScreen() {
               }
               icon="card-outline"
               disabled={member.due_amount <= 0 || membershipCancelled}
-              onPress={() => router.push(`/payment/${member.id}`)}
+              onPress={() => router.push(`/payment/${member.id}?membershipId=${member.membership_row_id}` as never)}
             />
           </View>
           <View style={styles.buttonHalf}>
@@ -332,10 +369,31 @@ export default function MemberDetailScreen() {
               icon="share-outline"
               variant="secondary"
               loading={busy}
-              onPress={shareInvoice}
+              disabled={!member.memberships[0]}
+              onPress={() => shareInvoice(member.memberships[0])}
             />
           </View>
         </View>
+      </Section>
+
+      <Section title="Membership periods" subtitle="Choose the exact period when recording payment or sharing an invoice">
+        {member.memberships.length === 0 && <Text style={styles.emptyPayment}>No membership periods recorded.</Text>}
+        {member.memberships.map((period) => (
+          <View key={period.id} style={styles.periodCard}>
+            <Text style={styles.periodTitle}>{period.plan_name} · {period.status === 'active' ? period.start_date > todayIso() ? 'upcoming' : period.end_date < todayIso() ? 'expired' : 'active' : period.status}</Text>
+            <Text style={styles.periodMeta}>{formatDate(period.start_date)} to {formatDate(period.end_date)} · #{period.id}</Text>
+            <View style={styles.amountGrid}>
+              <Amount label="Total" value={formatCurrency(period.total_amount)} />
+              <Amount label="Paid" value={formatCurrency(period.paid_amount)} />
+              <Amount label="Due" value={formatCurrency(period.due_amount)} danger={period.due_amount > 0} />
+            </View>
+            <View style={styles.periodActions}>
+              {period.status !== 'cancelled' && period.due_amount > 0 && <Pressable accessibilityRole="button" disabled={busy} style={styles.periodAction} onPress={() => router.push(`/payment/${member.id}?membershipId=${period.id}` as never)}><Text style={styles.periodActionText}>Add payment</Text></Pressable>}
+              <Pressable accessibilityRole="button" disabled={busy} style={styles.periodAction} onPress={() => shareInvoice(period)}><Text style={styles.periodActionText}>Share invoice</Text></Pressable>
+              {period.status !== 'cancelled' && <Pressable accessibilityRole="button" disabled={busy} style={styles.periodAction} onPress={() => prepareReminder('renewal', period)}><Text style={styles.periodActionText}>Renewal draft</Text></Pressable>}
+            </View>
+          </View>
+        ))}
       </Section>
 
       <Section title="Member details">
@@ -351,23 +409,25 @@ export default function MemberDetailScreen() {
         {!!member.notes && <DetailRow icon="document-text-outline" label="Notes" value={member.notes} />}
       </Section>
 
-      <Section title="Payment history" subtitle={`${member.payments.length} recorded transaction${member.payments.length === 1 ? '' : 's'}`}>
-        {member.payments.length === 0 ? (
-          <Text style={styles.emptyPayment}>No payments have been recorded.</Text>
-        ) : (
-          member.payments.map((payment) => (
-            <View key={payment.id} style={styles.paymentRow}>
-              <View style={styles.paymentIcon}>
-                <Ionicons name="arrow-down" size={18} color={palette.emeraldDark} />
+      <Section title="Payment audit history" subtitle="Reversed entries stay visible and are excluded from balances and collections">
+        {member.payments.length === 0 ? <Text style={styles.emptyPayment}>No payments have been recorded.</Text> : member.payments.map((payment) => (
+          <View key={payment.id} style={styles.auditCard}>
+            <View style={styles.paymentRow}>
+              <View style={[styles.paymentIcon, payment.voided_at ? styles.voidIcon : null]}>
+                <Ionicons name={payment.voided_at ? 'return-up-back' : 'arrow-down'} size={18} color={payment.voided_at ? palette.red : palette.emeraldDark} />
               </View>
               <View style={styles.paymentCopy}>
-                <Text style={styles.paymentMethod}>{payment.method}</Text>
-                <Text style={styles.paymentDate}>{formatDate(payment.paid_at)}{payment.note ? ` · ${payment.note}` : ''}</Text>
+                <Text style={styles.paymentMethod}>{payment.method} · Receipt #{payment.id}</Text>
+                <Text style={styles.paymentDate}>{formatDate(payment.paid_at)} · Period #{payment.membership_id}</Text>
+                {!!payment.note && <Text style={styles.paymentDate}>{payment.note}</Text>}
               </View>
-              <Text style={styles.paymentAmount}>{formatCurrency(payment.amount)}</Text>
+              <Text style={[styles.paymentAmount, payment.voided_at ? styles.voidAmount : null]}>{formatCurrency(payment.amount)}</Text>
             </View>
-          ))
-        )}
+            {payment.voided_at ? <View style={styles.voidDetail}><Text style={styles.voidLabel}>Reversed · {formatDate(payment.voided_at.slice(0, 10))}</Text><Text style={styles.paymentDate}>{payment.void_reason}</Text></View> : (
+              <Pressable accessibilityRole="button" accessibilityLabel={`Reverse payment ${payment.id}`} disabled={busy} onPress={() => { setPaymentToReverse(payment); setReversalReason(''); }} style={styles.reverseAction}><Text style={styles.deleteButtonText}>Reverse incorrect payment</Text></Pressable>
+            )}
+          </View>
+        ))}
       </Section>
 
       <Section
@@ -414,6 +474,34 @@ export default function MemberDetailScreen() {
           </Pressable>
         </View>
       </Section>
+
+      <Modal animationType="slide" transparent visible={reminderText !== null} onRequestClose={() => setReminderText(null)}>
+        <KeyboardAvoidingView style={styles.confirmBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <ScrollView keyboardShouldPersistTaps="handled" style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
+          <View style={styles.draftCard}>
+            <Text style={styles.confirmTitle}>Review WhatsApp draft</Text>
+            <Text style={styles.confirmMessage}>Review the details before opening WhatsApp. You choose when to send the message.</Text>
+            <FormField label="Message" value={reminderText ?? ''} onChangeText={setReminderText} multiline style={styles.draftInput} />
+            <PrimaryButton label="Open WhatsApp draft" icon="logo-whatsapp" disabled={!reminderText?.trim()} onPress={() => openContact('whatsapp', reminderText ?? '')} />
+            <Pressable onPress={() => setReminderText(null)} style={styles.keepButton}><Text style={styles.keepButtonText}>Close draft</Text></Pressable>
+          </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal animationType="fade" transparent visible={paymentToReverse !== null} onRequestClose={() => !busy && setPaymentToReverse(null)}>
+        <KeyboardAvoidingView style={styles.confirmBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <ScrollView keyboardShouldPersistTaps="handled" style={styles.modalScroll} contentContainerStyle={styles.modalContent}>
+          <View style={styles.draftCard}>
+            <Text style={styles.confirmTitle}>Reverse {formatCurrency(paymentToReverse?.amount ?? 0)} payment?</Text>
+            <Text style={styles.confirmMessage}>Receipt #{paymentToReverse?.id} will remain in the audit history. Collections and this period’s balance will be recalculated. This does not send a refund.</Text>
+            <FormField label="Reason for reversal *" value={reversalReason} onChangeText={setReversalReason} multiline placeholder="For example: duplicate entry or incorrect amount" />
+            <PrimaryButton label="Confirm reversal" icon="return-up-back" variant="danger" loading={busy} disabled={!reversalReason.trim()} onPress={confirmReversal} />
+            <Pressable disabled={busy} onPress={() => setPaymentToReverse(null)} style={styles.keepButton}><Text style={styles.keepButtonText}>Keep payment</Text></Pressable>
+          </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </Modal>
 
       <Modal
         animationType="fade"
@@ -547,6 +635,23 @@ function DetailRow({
 }
 
 const styles = StyleSheet.create({
+  lifetimeDue: { color: palette.ink, fontSize: 30, fontWeight: '900', marginBottom: 16 },
+  periodCard: { paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: palette.line },
+  periodTitle: { color: palette.ink, fontSize: 15, fontWeight: '800', textTransform: 'capitalize' },
+  periodMeta: { color: palette.muted, fontSize: 12, marginTop: 5, marginBottom: 12 },
+  periodActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
+  periodAction: { padding: 12, borderRadius: radii.pill, backgroundColor: palette.emeraldSoft },
+  periodActionText: { color: palette.emeraldDark, fontSize: 12, fontWeight: '800' },
+  auditCard: { paddingBottom: 12, marginBottom: 8, borderBottomColor: palette.line, borderBottomWidth: 1 },
+  voidIcon: { backgroundColor: palette.redSoft },
+  voidAmount: { color: palette.muted, textDecorationLine: 'line-through' },
+  voidDetail: { paddingLeft: 49, paddingTop: 4 },
+  voidLabel: { color: palette.red, fontWeight: '800', fontSize: 12 },
+  reverseAction: { alignSelf: 'flex-end', padding: 10 },
+  draftCard: { backgroundColor: palette.card, borderRadius: radii.xl, padding: 22 },
+  draftInput: { flex: 1, color: palette.ink, fontSize: 14, minHeight: 160, maxHeight: 240, textAlignVertical: 'top' },
+  modalScroll: { flexGrow: 0, width: '100%' },
+  modalContent: { paddingVertical: 24 },
   profileCard: { backgroundColor: palette.ink, borderRadius: radii.xl, padding: 20, marginTop: 10, marginBottom: 16, ...shadows.card },
   profileTop: { flexDirection: 'row', alignItems: 'center', gap: 15 },
   profileCopy: { flex: 1 },
