@@ -923,7 +923,7 @@ export async function getReportData(db: SQLiteDatabase): Promise<ReportData> {
      LIMIT 10`,
   );
   const recentExpenses = await db.getAllAsync<Expense>(
-    'SELECT * FROM expenses ORDER BY expense_date DESC, id DESC LIMIT 10',
+    'SELECT * FROM expenses ORDER BY expense_date DESC, id DESC',
   );
 
   const collectedThisMonth = month?.collected ?? 0;

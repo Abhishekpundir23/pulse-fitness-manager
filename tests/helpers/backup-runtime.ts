@@ -24,6 +24,7 @@ export async function backupRuntime() {
     cancelDirectory: false,
     sharedUris: [] as string[],
     beforeWrite: undefined as ((path: string) => void) | undefined,
+    beforePhotoRead: undefined as ((path: string) => void) | undefined,
     transformWrite: undefined as ((path: string, data: Buffer) => Buffer) | undefined,
   };
   function location(...parts: Location[]) {
@@ -49,7 +50,10 @@ export async function backupRuntime() {
       writeFileSync(this.path, state.transformWrite?.(this.path, bytes) ?? bytes);
     }
     async text() { return readFileSync(this.path, 'utf8'); }
-    async base64() { return readFileSync(this.path).toString('base64'); }
+    async base64() {
+      state.beforePhotoRead?.(this.path);
+      return readFileSync(this.path).toString('base64');
+    }
     copy(destination: DiskFile | DiskDirectory) {
       const target = destination instanceof DiskDirectory ? join(destination.path, this.name) : destination.path;
       state.beforeWrite?.(target);

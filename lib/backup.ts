@@ -51,12 +51,19 @@ async function collectMemberPhotos(rows: BackupRow[]) {
   for (const member of rows) {
     const uri = typeof member.photo_uri === 'string' ? member.photo_uri : '';
     if (!uri) continue;
-    const photo = new File(uri);
-    if (!photo.exists) continue;
-    memberPhotos[String(member.id)] = {
-      data: await photo.base64(),
-      extension: uri.match(/\.([a-zA-Z0-9]+)(?:\?|$)/)?.[1]?.toLowerCase() ?? 'jpg',
-    };
+    try {
+      const photo = new File(uri);
+      if (!photo.exists) continue;
+      const data = await photo.base64();
+      if (!data) continue;
+      memberPhotos[String(member.id)] = {
+        data,
+        extension: uri.match(/\.([a-zA-Z0-9]+)(?:\?|$)/)?.[1]?.toLowerCase() ?? 'jpg',
+      };
+    } catch {
+      // An unavailable optional image must not block backing up gym records.
+      // Keep the original row's photo_uri so the preview discloses its omission.
+    }
   }
   return memberPhotos;
 }

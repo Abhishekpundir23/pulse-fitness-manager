@@ -1,7 +1,8 @@
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { ReactNode, useState } from 'react';
+import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
+import { ReactNode, useContext, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -29,6 +30,7 @@ export function Screen({
   scroll?: boolean;
   contentContainerStyle?: StyleProp<ViewStyle>;
 }) {
+  const tabBarHeight = useContext(BottomTabBarHeightContext);
   const content = scroll ? (
     <ScrollView
       style={styles.flex}
@@ -41,7 +43,13 @@ export function Screen({
   ) : (
     <View style={[styles.screenContent, styles.flex, contentContainerStyle]}>{children}</View>
   );
-  return <SafeAreaView style={styles.safeArea}>{content}</SafeAreaView>;
+  return (
+    <SafeAreaView
+      style={styles.safeArea}
+      edges={tabBarHeight === undefined ? ['top', 'right', 'bottom', 'left'] : ['top', 'right', 'left']}>
+      {content}
+    </SafeAreaView>
+  );
 }
 
 export function TopBar({

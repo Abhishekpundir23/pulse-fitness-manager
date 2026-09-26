@@ -212,3 +212,43 @@ test('restore preview reports an unavailable original photo instead of implying 
   assert.equal(previewArchive(prepared.archive).missingPhotos, 1);
   assert.equal(previewArchive(prepared.archive).counts.photos, 0);
 });
+
+test('an empty profile photo does not prevent a verified backup of every record', async (t) => {
+  const runtime = await backupRuntime();
+  t.after(() => runtime.close());
+  await seed(runtime);
+  writeFileSync(join(runtime.root, 'document', 'original.png'), Buffer.alloc(0));
+  const before = await snapshot(runtime);
+
+  const prepared = await runtime.service.prepareBackup(runtime.db);
+  const savedUri = await runtime.service.savePreparedBackup(prepared);
+  const saved = parseBackupArchive(readFileSync(runtime.filePath(savedUri), 'utf8'));
+  assert.deepEqual(saved.data, before);
+  assert.deepEqual(saved.memberPhotos, {});
+  assert.equal(previewArchive(saved).missingPhotos, 1);
+  assert.deepEqual(await snapshot(runtime), before, 'export must preserve the original photo reference and all records');
+});
+
+test('an unreadable profile photo is disclosed while later photos and every record are backed up', async (t) => {
+  const runtime = await backupRuntime();
+  t.after(() => runtime.close());
+  await seed(runtime);
+  const readablePhoto = join(runtime.root, 'document', 'readable.png');
+  writeFileSync(readablePhoto, photoBytes);
+  await runtime.db.runAsync(`INSERT INTO members
+    (id, membership_id, name, gender, phone, status, joined_at, photo_uri)
+    VALUES (11, 'PF-0011', 'Second member', 'Other', '9876543211', 'active', '2026-09-01', ?)`, `file://${readablePhoto}`);
+  const before = await snapshot(runtime);
+  runtime.state.beforePhotoRead = (path) => {
+    if (path.endsWith('/original.png')) throw new Error('EACCES: original profile photo is unreadable');
+  };
+
+  const prepared = await runtime.service.prepareBackup(runtime.db);
+  const savedUri = await runtime.service.savePreparedBackup(prepared);
+  const saved = parseBackupArchive(readFileSync(runtime.filePath(savedUri), 'utf8'));
+  assert.deepEqual(saved.data, before);
+  assert.deepEqual(saved.memberPhotos, { '11': { data: photoBytes.toString('base64'), extension: 'png' } });
+  assert.equal(previewArchive(saved).missingPhotos, 1);
+  assert.equal(previewArchive(saved).counts.photos, 1);
+  assert.deepEqual(await snapshot(runtime), before);
+});
