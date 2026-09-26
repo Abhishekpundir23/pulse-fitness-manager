@@ -2,7 +2,7 @@ export type Gender = 'Male' | 'Female' | 'Other';
 export type MemberStatus = 'active' | 'blocked' | 'archived';
 export type MembershipStatus = 'active' | 'expired' | 'frozen' | 'cancelled';
 export type PaymentMethod = 'Cash' | 'UPI' | 'Card' | 'Bank transfer';
-export type MemberFilter = 'all' | 'active' | 'due' | 'paid' | 'expired' | 'cancelled';
+export type MemberFilter = 'all' | 'active' | 'expiring' | 'due' | 'paid' | 'expired' | 'cancelled';
 export type SnapshotStatus = 'none' | 'active' | 'expired' | 'cancelled' | 'upcoming' | 'frozen';
 
 export type Plan = {

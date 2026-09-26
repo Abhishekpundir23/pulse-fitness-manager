@@ -1,4 +1,5 @@
 import { monthRange } from './history-period.ts';
+import { todayIso } from './format.ts';
 import type { PaymentHistoryFilters } from './types.ts';
 
 export function buildPaymentHistoryQuery(filters: PaymentHistoryFilters) {
@@ -16,7 +17,8 @@ export function buildPaymentHistoryQuery(filters: PaymentHistoryFilters) {
   if (filters.month) {
     const range = monthRange(filters.month);
     clauses.push('p.paid_at BETWEEN ? AND ?');
-    args.push(range.start, range.end);
+    const today = todayIso();
+    args.push(range.start, filters.month === today.slice(0, 7) ? today : range.end);
   }
 
   return {

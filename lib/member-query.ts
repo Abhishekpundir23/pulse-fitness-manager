@@ -1,4 +1,21 @@
-import type { MemberFilter } from './types.ts';
+import type { MemberFilter, MemberListItem } from './types.ts';
+
+export type MemberSort = 'recent' | 'name' | 'expiry' | 'due';
+
+export function sortDirectoryMembers<T extends Pick<MemberListItem, 'id' | 'name' | 'due_amount' | 'end_date'>>(
+  members: readonly T[],
+  order: MemberSort,
+): T[] {
+  if (order === 'recent') return [...members];
+  return [...members].sort((first, second) => {
+    const primary = order === 'due'
+      ? second.due_amount - first.due_amount
+      : order === 'expiry'
+        ? (first.end_date ?? '9999-12-31').localeCompare(second.end_date ?? '9999-12-31')
+        : first.name.localeCompare(second.name, 'en-IN', { sensitivity: 'base', numeric: true });
+    return primary || first.name.localeCompare(second.name, 'en-IN') || first.id - second.id;
+  });
+}
 
 type Input = {
   search: string;
@@ -13,8 +30,12 @@ function filterClause(filter: MemberFilter) {
   const cancelled = `(ms.status = 'cancelled' AND (ms.cancelled_at IS NULL OR ms.cancelled_at <= ${snapshot}))`;
   switch (filter) {
     case 'active':
-      return `AND ms.id IS NOT NULL AND NOT ${cancelled} AND ms.status != 'frozen'
+      return `AND m.status = 'active' AND ms.id IS NOT NULL AND NOT ${cancelled} AND ms.status != 'frozen'
         AND ms.start_date <= ${snapshot} AND ms.end_date >= ${snapshot}`;
+    case 'expiring':
+      return `AND m.status = 'active' AND ms.id IS NOT NULL AND NOT ${cancelled} AND ms.status != 'frozen'
+        AND ms.start_date <= ${snapshot}
+        AND ms.end_date BETWEEN ${snapshot} AND date(${snapshot}, '+7 day')`;
     case 'due':
       return 'AND COALESCE(sd.due_amount, 0) > 0';
     case 'paid':

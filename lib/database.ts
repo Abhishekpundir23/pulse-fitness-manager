@@ -1,6 +1,7 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
-import { addMonths, todayIso } from '@/lib/format';
+import { addMonths, todayIso, toIsoDate } from '@/lib/format';
+import { toggleMemberAttendance } from '@/lib/attendance';
 import { buildMemberSnapshotQuery } from '@/lib/member-query';
 import { CREATE_MEMBER_PHONE_GUARDS_SQL } from '@/lib/member-phone-guards';
 import { normalizeMemberPhone } from '@/lib/member-phone';
@@ -712,24 +713,7 @@ export async function reversePayment(
 }
 
 export async function toggleAttendance(db: SQLiteDatabase, memberId: number, date = todayIso()) {
-  const existing = await db.getFirstAsync<{ id: number }>(
-    'SELECT id FROM attendance WHERE member_id = ? AND attendance_date = ?',
-    memberId,
-    date,
-  );
-  if (existing) {
-    await db.runAsync('DELETE FROM attendance WHERE id = ?', existing.id);
-    return false;
-  }
-  const now = new Date();
-  const checkIn = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-  await db.runAsync(
-    'INSERT INTO attendance(member_id, attendance_date, check_in_time) VALUES (?, ?, ?)',
-    memberId,
-    date,
-    checkIn,
-  );
-  return true;
+  return toggleMemberAttendance(db, memberId, date);
 }
 
 export async function updateMemberStatus(
@@ -772,25 +756,13 @@ export async function deleteMember(db: SQLiteDatabase, memberId: number) {
 export async function getDashboardStats(db: SQLiteDatabase): Promise<DashboardStats> {
   const today = todayIso();
   const monthStart = `${today.slice(0, 7)}-01`;
-  const memberCounts = await db.getFirstAsync<{
-    active_members: number;
-    total_members: number;
-    expiring_soon: number;
-  }>(
-    `SELECT
-      SUM(CASE WHEN m.status = 'active' AND ms.status = 'active' AND ms.start_date <= ? AND ms.end_date >= ? THEN 1 ELSE 0 END) AS active_members,
-      COUNT(*) AS total_members,
-      SUM(CASE WHEN ms.status = 'active' AND ms.end_date BETWEEN ? AND date(?, '+7 day') THEN 1 ELSE 0 END) AS expiring_soon
-     FROM members m
-     LEFT JOIN memberships ms ON ms.id = (
-       SELECT id FROM memberships WHERE member_id = m.id ORDER BY start_date DESC, id DESC LIMIT 1
-     )
-     WHERE m.status != 'archived'`,
-    today,
-    today,
-    today,
-    today,
-  );
+  const activeQuery = buildMemberSnapshotQuery({
+    search: '', filter: 'active', snapshotDate: today, attendanceDate: today, currentView: true,
+  });
+  const [memberCounts, activeCount] = await Promise.all([
+    db.getFirstAsync<{ total_members: number }>("SELECT COUNT(*) AS total_members FROM members WHERE status != 'archived'"),
+    db.getFirstAsync<{ count: number }>(`SELECT COUNT(*) AS count FROM (${activeQuery.sql})`, ...activeQuery.args),
+  ]);
   const finance = await db.getFirstAsync<{ collected: number; due: number }>(
     `SELECT
       COALESCE((SELECT ROUND(SUM(amount), 2) FROM payments WHERE voided_at IS NULL AND paid_at BETWEEN ? AND ?), 0) AS collected,
@@ -815,24 +787,15 @@ export async function getDashboardStats(db: SQLiteDatabase): Promise<DashboardSt
     today,
     today,
   );
-  const expiringMembers = await db.getAllAsync<MemberListItem>(
-    `${MEMBER_LIST_QUERY}
-     WHERE m.status = 'active' AND ms.status = 'active'
-       AND ms.end_date BETWEEN ? AND date(?, '+7 day')
-     ORDER BY ms.end_date ASC
-     LIMIT 5`,
-    today,
-    today,
-    today,
-    today,
-    today,
-    today,
-  );
+  const allExpiringMembers = await getMembers(db, '', 'expiring', today);
+  const expiringMembers = allExpiringMembers
+    .sort((first, second) => (first.end_date ?? '').localeCompare(second.end_date ?? '') || first.id - second.id)
+    .slice(0, 5);
   const weeklyAttendance: { label: string; count: number }[] = [];
   for (let offset = 6; offset >= 0; offset -= 1) {
     const date = new Date();
     date.setDate(date.getDate() - offset);
-    const iso = date.toISOString().slice(0, 10);
+    const iso = toIsoDate(date);
     const count = await db.getFirstAsync<{ count: number }>(
       'SELECT COUNT(*) AS count FROM attendance WHERE attendance_date = ?',
       iso,
@@ -844,9 +807,9 @@ export async function getDashboardStats(db: SQLiteDatabase): Promise<DashboardSt
   }
 
   return {
-    activeMembers: memberCounts?.active_members ?? 0,
+    activeMembers: activeCount?.count ?? 0,
     totalMembers: memberCounts?.total_members ?? 0,
-    expiringSoon: memberCounts?.expiring_soon ?? 0,
+    expiringSoon: allExpiringMembers.length,
     presentToday: present?.count ?? 0,
     collectedThisMonth: finance?.collected ?? 0,
     outstandingDue: finance?.due ?? 0,

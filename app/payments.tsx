@@ -1,12 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { MonthFilter } from '@/components/month-filter';
-import { Chip, EmptyState, LoadingView, Screen, SearchBox, TopBar } from '@/components/ui-kit';
+import { Chip, EmptyState, LoadingView, PrimaryButton, Screen, SearchBox, TopBar } from '@/components/ui-kit';
 import { useAppData } from '@/contexts/app-data';
 import { getPaymentHistory } from '@/lib/database';
 import { formatCurrency, formatDate } from '@/lib/format';
@@ -15,36 +15,54 @@ import type { PaymentHistoryMethod, PaymentHistoryResult } from '@/lib/types';
 
 const METHODS: PaymentHistoryMethod[] = ['all', 'Cash', 'UPI', 'Card', 'Bank transfer'];
 
+function routeMonth(value?: string | string[]) {
+  const month = Array.isArray(value) ? value[0] : value;
+  return month && /^\d{4}-(0[1-9]|1[0-2])$/.test(month) ? month : null;
+}
+
 export default function PaymentHistoryScreen() {
+  const params = useLocalSearchParams<{ month?: string }>();
   const db = useSQLiteContext();
   const { revision } = useAppData();
   const [search, setSearch] = useState('');
-  const [month, setMonth] = useState<string | null>(null);
+  const [month, setMonth] = useState<string | null>(() => routeMonth(params.month));
   const [method, setMethod] = useState<PaymentHistoryMethod>('all');
-  const [history, setHistory] = useState<PaymentHistoryResult | null>(null);
-  const [loadError, setLoadError] = useState('');
+  const [result, setResult] = useState<{ key: string; history: PaymentHistoryResult } | null>(null);
+  const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const requestRef = useRef(0);
+  const key = JSON.stringify([search, month, method]);
+  const history = result?.key === key ? result.history : null;
+  const loadError = failure?.key === key ? failure.message : '';
+
+  useEffect(() => { setMonth(routeMonth(params.month)); }, [params.month]);
 
   const load = useCallback(async () => {
+    const request = ++requestRef.current;
+    setLoading(true);
     try {
-      setHistory(await getPaymentHistory(db, { search, month, method, includeVoided: true }));
-      setLoadError('');
+      const next = await getPaymentHistory(db, { search, month, method, includeVoided: true });
+      if (request !== requestRef.current) return;
+      setResult({ key, history: next });
+      setFailure(null);
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : 'Please try again.');
+      if (request !== requestRef.current) return;
+      setResult(null);
+      setFailure({ key, message: error instanceof Error ? error.message : 'Please try again.' });
+    } finally {
+      if (request === requestRef.current) setLoading(false);
     }
-  }, [db, method, month, search]);
+  }, [db, method, month, search, key]);
 
   useFocusEffect(useCallback(() => {
     void revision;
-    load();
-  }, [load, revision]));
-
-  useEffect(() => {
-    const timer = setTimeout(load, 180);
-    return () => clearTimeout(timer);
-  }, [load]);
+    setLoading(true);
+    const timer = setTimeout(() => { void load(); }, search.trim() ? 180 : 0);
+    return () => { clearTimeout(timer); requestRef.current += 1; };
+  }, [load, revision, search]));
 
   const emptyState = loadError ? (
-    <View style={styles.emptyWrap}><EmptyState icon="alert-circle-outline" title="Could not load payments" message={loadError} /></View>
+    <View style={styles.emptyWrap}><EmptyState icon="alert-circle-outline" title="Could not load payments" message={loadError} action={<PrimaryButton label="Try again" onPress={() => { void load(); }} />} /></View>
   ) : history === null ? (
     <View style={styles.emptyWrap}><LoadingView /></View>
   ) : (
@@ -63,6 +81,8 @@ export default function PaymentHistoryScreen() {
     <Screen scroll={false} contentContainerStyle={styles.screen}>
       <FlatList
         data={history?.items ?? []}
+        refreshing={loading && history !== null}
+        onRefresh={() => { void load(); }}
         keyExtractor={(payment) => String(payment.id)}
         renderItem={({ item }) => (
           <Pressable
@@ -87,7 +107,7 @@ export default function PaymentHistoryScreen() {
             <TopBar
               eyebrow="Collections"
               title="Payment history"
-              subtitle={history ? `${history.count} recorded entr${history.count === 1 ? 'y' : 'ies'}, including reversals` : 'Loading payments'}
+              subtitle={history ? `${history.count} recorded entr${history.count === 1 ? 'y' : 'ies'}, including reversals` : loadError ? 'Payments are unavailable' : 'Loading payments'}
             />
             <SearchBox value={search} onChangeText={setSearch} placeholder="Name, phone or member ID" />
             <MonthFilter value={month} onChange={setMonth} allowAllTime />
@@ -101,13 +121,13 @@ export default function PaymentHistoryScreen() {
                 />
               ))}
             </View>
-            <View style={styles.summaryCard}>
+            {history && <View style={styles.summaryCard}>
               <View>
                 <Text style={styles.summaryLabel}>Filtered collection · reversals excluded</Text>
-                <Text style={styles.summaryCount}>{history?.items.filter((payment) => !payment.voided_at).length ?? 0} valid payments</Text>
+                <Text style={styles.summaryCount}>{history.items.filter((payment) => !payment.voided_at).length} valid payments</Text>
               </View>
-              <Text style={styles.summaryTotal}>{formatCurrency(history?.total ?? 0)}</Text>
-            </View>
+              <Text style={styles.summaryTotal}>{formatCurrency(history.total)}</Text>
+            </View>}
           </>
         )}
         ListEmptyComponent={emptyState}
