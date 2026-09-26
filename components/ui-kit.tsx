@@ -2,6 +2,7 @@ import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/dat
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
+import { HeaderShownContext } from '@react-navigation/elements';
 import { ReactNode, useContext, useState } from 'react';
 import {
   ActivityIndicator,
@@ -36,6 +37,7 @@ export function Screen({
   onRefresh?: () => void;
 }) {
   const tabBarHeight = useContext(BottomTabBarHeightContext);
+  const headerShown = useContext(HeaderShownContext);
   const content = scroll ? (
     <ScrollView
       style={styles.flex}
@@ -52,7 +54,7 @@ export function Screen({
   return (
     <SafeAreaView
       style={styles.safeArea}
-      edges={tabBarHeight === undefined ? ['top', 'right', 'bottom', 'left'] : ['top', 'right', 'left']}>
+      edges={{ top: headerShown ? 'off' : 'additive', right: 'additive', bottom: tabBarHeight === undefined ? 'additive' : 'off', left: 'additive' }}>
       {content}
     </SafeAreaView>
   );
