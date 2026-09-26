@@ -28,7 +28,7 @@ A modern, local-first Android app for managing gym members, membership plans, pa
 - Editable WhatsApp dues and renewal drafts, sent manually by the owner
 - Backup previews and verified local recovery copies before restoring
 
-Changing or deactivating a plan affects future memberships only. Existing membership invoices, payments, and balances retain the original agreed plan.
+Editing or deactivating a plan in the catalog affects future memberships. Existing memberships retain their captured plan names, charges, payments and dates. When upgrading an older installation, plan names are captured from the catalog at that time; names overwritten before the upgrade cannot be reconstructed.
 
 ## First setup
 
@@ -76,6 +76,8 @@ npx expo-doctor
 npx expo export --platform android
 ```
 
+The 1.3.0 update passes lint, TypeScript and 131 tests. Native Android checks have also verified installation over 1.2.1 with existing data preserved, all 36 test expenses reachable by scrolling, folder-backup readback, and a shared file read five seconds after opening the receiver. See [the Android release check](docs/backup-device-check.md) for the current native validation record and any remaining checks.
+
 ## Android Build
 
 To create an installable preview APK:
@@ -84,14 +86,18 @@ To create an installable preview APK:
 npx eas-cli build --platform android --profile preview
 ```
 
+Version 1.3.0/build 10 was built from `cf0187c` in [EAS build e32c1a9a](https://expo.dev/accounts/abhi2302/projects/pulse-fitness-manager/builds/e32c1a9a-c2a7-4521-b78f-91b6a7fdaabf). Its package ID and signing certificate match the previously distributed 1.2.1/build 9 APK. This is an installable update APK; no app-store publication or PR merge is implied.
+
 ## Data and Backups
 
 All operational data is stored locally in SQLite on one owner's phone. The **Gym** tab prepares and verifies a versioned JSON archive before it can be saved to a selected folder or handed to Android's share sheet. A share action does not claim that Google Drive saved the file; confirm the destination in the selected app. These archives contain member contact and financial information and are not encrypted by the app.
 
-Restore first shows the selected gym, archive date and record counts. After confirmation, the app writes and verifies a local recovery copy before replacing records in a transaction. Recovery copies remain available after replacement or failure, and can be previewed, shared or restored from Gym settings; restoring one creates another copy without overwriting earlier copies. Missing source photos are disclosed before export and restore, and photo-restoration failures are reported separately. A recovery copy on this phone does not protect against loss, uninstall or device failure: keep an external copy too. New exports and recovery copies use archive version 2 to preserve purchased plan names and payment reversals; older apps reject these files instead of losing reversal information. Old version-1 JSON archives remain supported for import.
+Restore first shows the selected gym, archive date and record counts. After confirmation, the app writes and verifies a local recovery copy before replacing records in a transaction. Verified recovery copies are retained after replacement or a later restore failure and can be previewed, shared or restored from Gym settings. An incomplete file left by a failed recovery write is marked unverified and cannot be restored. Restoring a verified recovery copy creates another copy without overwriting earlier copies. Missing, empty or unreadable source photos are omitted and disclosed before export and restore; photo-restoration failures are reported separately. A recovery copy on this phone does not protect against loss, uninstall or device failure: keep an external copy too. New exports and recovery copies use archive version 2 to preserve purchased plan names and payment reversals; older apps reject these files instead of losing reversal information. Supported version-1 JSON archives remain readable.
 
 Folder saves are read back and compared with the complete archive before being recorded as successful; failed writes attempt to remove only the newly created incomplete file. Sharing uses a separate verified cache copy that stays available after the share picker closes, so delayed receiving apps can still read it. Only a folder save updates the recorded backup date. Closing the share picker does not prove that the destination saved the file; check the receiving app. See [the Android backup release check](docs/backup-device-check.md) for device verification.
 
-Install signed updates over the existing app without uninstalling it. The Android package ID remains `in.parsewave.pulsefitness`; take a backup before any update. An Android bundle export verifies compilation but is not an installable APK or a device test.
+For a folder backup, open **Gym → Backup & restore → Export backup → Save to folder**. In Android's file picker, open **Documents**, create or select **PulseBackups**, then choose **Use this folder** and **Allow**. Do not select the top-level internal-storage folder, which Android restricts. Wait for **Folder backup verified**, then keep a copy off the phone.
+
+Install updates over the existing app without uninstalling it or clearing its storage. An update must retain package ID `in.parsewave.pulsefitness` and the same signing certificate and use a higher Android version code. Try to save a backup first. If the old backup function fails, keep the installed app and its data intact; install the verified update in place, check the records, then export a fresh backup. Restoring a backup is not required to update. If Android refuses installation, preserve the current installation and investigate the error instead of uninstalling it. An Android bundle export alone is not an installable APK or a device test.
 
 Member data and generated backups are intentionally excluded from this repository.
