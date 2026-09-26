@@ -10,13 +10,15 @@ A modern, local-first Android app for managing gym members, membership plans, pa
 - Membership renewal and new-plan assignment for existing members
 - Full, partial, and pending payment tracking
 - Full-page payment history with member, month, and payment-method filters
-- Historical member snapshots with Active, Paid, Pending, Expired, and Cancelled filters
+- Historical member snapshots, expiring-soon and dues filters, with name, expiry and balance sorting
 - Membership cancellation that removes abandoned balances from dues
 - Permanent member deletion with cascading cleanup
-- Expense entry and removal with live monthly net calculation
+- Searchable complete expense ledger with monthly totals, entry validation and confirmed removal
 - Cash, UPI, card, and bank-transfer payment records
-- One-tap daily attendance
-- Live collection, dues, expiry, and attendance dashboards
+- Attendance by date, with safe past-day editing, present/absent filters and search-independent totals
+- Actionable dashboard with renewal follow-ups, dues, check-ins and a backup reminder
+- Selected-month collections, expenses and net cash flow, with matching receipt drilldowns
+- Separate gym details, plans, backup, help and privacy screens
 - Shareable PDF membership invoices
 - Local SQLite storage with no required backend
 - Verified JSON folder backups, Android file sharing and restore, including available profile photos
@@ -32,8 +34,8 @@ Editing or deactivating a plan in the catalog affects future memberships. Existi
 
 ## First setup
 
-1. Open **Gym** and save your gym name and contact details.
-2. Add your own membership plans: name, duration in months and price in rupees. There are no fixed tiers or seeded prices. Existing installations retain their existing plans.
+1. Open **Gym → Edit gym details** and save your gym name and contact details.
+2. Open **Gym → Membership plans** and add your own plans: name, duration in months and price in rupees. There are no fixed tiers or seeded prices. Existing installations retain their existing plans.
 3. Add a member, or use **Import member list** to download a blank CSV template and preview a completed list.
 4. Save a backup somewhere outside the app and keep a copy off the phone.
 
@@ -76,7 +78,7 @@ npx expo-doctor
 npx expo export --platform android
 ```
 
-The 1.3.0 update passes lint, TypeScript and 131 tests. Native Android checks have also verified installation over 1.2.1 with existing data preserved, all 36 test expenses reachable by scrolling, folder-backup readback, and a shared file read five seconds after opening the receiver. See [the Android release check](docs/backup-device-check.md) for the current native validation record and any remaining checks.
+Version 1.4.0 passes lint, TypeScript, 150 tests and all 18 Expo Doctor checks. See [the 1.4 release validation](docs/releases/1.4-validation.md) for artifact hashes, direct-upgrade preservation, native backup/recovery tests and production-bundle verification. Earlier 1.3 evidence remains in [the Android backup check](docs/backup-device-check.md).
 
 ## Android Build
 
@@ -86,11 +88,15 @@ To create an installable preview APK:
 npx eas-cli build --platform android --profile preview
 ```
 
-Version 1.3.0/build 10 was built from `cf0187c` in [EAS build e32c1a9a](https://expo.dev/accounts/abhi2302/projects/pulse-fitness-manager/builds/e32c1a9a-c2a7-4521-b78f-91b6a7fdaabf). Its package ID and signing certificate match the previously distributed 1.2.1/build 9 APK. This is an installable update APK; no app-store publication or PR merge is implied.
+Version 1.4.0/build 11 uses source `4b9ece3`. The preview profile creates the installable APK; the production profile creates the AAB for Google Play. Both retain the existing package and app signing certificate. See [the Play submission pack](docs/play-store/README.md) for store copy, privacy policy, signing continuity and account/testing requirements. No Play publication or PR merge is implied.
+
+```bash
+npx eas-cli build --platform android --profile production
+```
 
 ## Data and Backups
 
-All operational data is stored locally in SQLite on one owner's phone. The **Gym** tab prepares and verifies a versioned JSON archive before it can be saved to a selected folder or handed to Android's share sheet. A share action does not claim that Google Drive saved the file; confirm the destination in the selected app. These archives contain member contact and financial information and are not encrypted by the app.
+All operational data is stored locally in SQLite on one owner's phone. Automatic Android cloud and device-transfer backups are disabled; manual external backups are essential. **Gym → Backup & restore** prepares and verifies a versioned JSON archive before it can be saved to a selected folder or handed to Android's share sheet. A share action does not claim that Google Drive saved the file; confirm the destination in the selected app. These archives contain member contact and financial information and are not encrypted by the app.
 
 Restore first shows the selected gym, archive date and record counts. After confirmation, the app writes and verifies a local recovery copy before replacing records in a transaction. Verified recovery copies are retained after replacement or a later restore failure and can be previewed, shared or restored from Gym settings. An incomplete file left by a failed recovery write is marked unverified and cannot be restored. Restoring a verified recovery copy creates another copy without overwriting earlier copies. Missing, empty or unreadable source photos are omitted and disclosed before export and restore; photo-restoration failures are reported separately. A recovery copy on this phone does not protect against loss, uninstall or device failure: keep an external copy too. New exports and recovery copies use archive version 2 to preserve purchased plan names and payment reversals; older apps reject these files instead of losing reversal information. Supported version-1 JSON archives remain readable.
 
